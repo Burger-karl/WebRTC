@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — Room: {{ room_id }}</title>
+  <link rel="stylesheet" href="/frontend/style.css"/>
+</head>
+<body class="room-page">
+
+  <!-- ── Pre-call: Name Entry Modal ───────────────────────── -->
+  <div id="preCallModal" class="modal-overlay">
+    <div class="modal">
+      <div class="logo small">
+        <span class="logo-icon">📹</span>
+        <span class="logo-text">MeetFree</span>
+      </div>
+
+      <h2>Ready to join?</h2>
+      <p class="room-label">Room: <strong>{{ room_id }}</strong></p>
+
+      <!-- Local camera preview before joining -->
+      <div class="preview-wrapper">
+        <video id="previewVideo" autoplay muted playsinline></video>
+        <div id="previewPlaceholder" class="video-placeholder">
+          <span>📷</span>
+          <p>Camera off</p>
+        </div>
+      </div>
+
+      <input
+        type="text"
+        id="nameInput"
+        placeholder="Your name"
+        maxlength="30"
+        autocomplete="off"
+      />
+
+      <div class="pre-controls">
+        <button id="togglePreviewCam" class="ctrl-btn" onclick="togglePreviewCamera()">
+          <span id="previewCamIcon">📷</span>
+        </button>
+        <button id="togglePreviewMic" class="ctrl-btn" onclick="togglePreviewMic()">
+          <span id="previewMicIcon">🎙️</span>
+        </button>
+      </div>
+
+      <button class="join-btn" onclick="enterRoom()">Join Meeting</button>
+    </div>
+  </div>
+
+  <!-- ── Main Room Layout ──────────────────────────────────── -->
+  <div id="roomContainer" class="room-container hidden">
+
+    <!-- Video Grid -->
+    <div id="videoGrid" class="video-grid">
+      <!-- Video tiles are injected here by JS -->
+    </div>
+
+    <!-- Sidebar: Chat -->
+    <div id="chatPanel" class="chat-panel hidden">
+      <div class="chat-header">
+        <span>Room Chat</span>
+        <button onclick="toggleChat()" class="close-btn">✕</button>
+      </div>
+      <div id="chatMessages" class="chat-messages"></div>
+      <div class="chat-input-row">
+        <input
+          type="text"
+          id="chatInput"
+          placeholder="Message everyone..."
+          onkeydown="if(event.key==='Enter') sendChat()"
+        />
+        <button onclick="sendChat()">Send</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Control Bar (bottom) ──────────────────────────────── -->
+  <div id="controlBar" class="control-bar hidden">
+    <div class="controls-left">
+      <span class="room-name-badge">{{ room_id }}</span>
+    </div>
+
+    <div class="controls-center">
+      <button id="micBtn" class="ctrl-btn active" onclick="toggleMic()" title="Mute/Unmute">
+        <span id="micIcon">🎙️</span>
+      </button>
+
+      <button id="camBtn" class="ctrl-btn active" onclick="toggleCamera()" title="Camera on/off">
+        <span id="camIcon">📷</span>
+      </button>
+
+      <button id="screenBtn" class="ctrl-btn" onclick="toggleScreenShare()" title="Screen share">
+        <span>🖥️</span>
+      </button>
+
+      <button class="ctrl-btn danger" onclick="leaveCall()" title="Leave meeting">
+        <span>📵</span>
+      </button>
+    </div>
+
+    <div class="controls-right">
+      <button class="ctrl-btn" onclick="toggleChat()" title="Chat">
+        💬
+        <span id="chatBadge" class="badge hidden">0</span>
+      </button>
+
+      <button class="ctrl-btn" onclick="copyRoomLink()" title="Copy invite link" id="copyBtn">
+        🔗
+      </button>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- ── Scripts ────────────────────────────────────────────── -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+  <script>
+    // Inject the room ID from Flask into JS
+    const ROOM_ID = "{{ room_id }}";
+  </script>
+  <script src="/frontend/app.js"></script>
+</body>
+</html>

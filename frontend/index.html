@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — Unlimited Video Calls</title>
+  <link rel="stylesheet" href="/frontend/style.css" />
+</head>
+<body class="landing-page">
+
+  <div class="landing-container">
+    <div class="logo">
+      <span class="logo-icon">📹</span>
+      <span class="logo-text">MeetFree</span>
+    </div>
+
+    <h1>Video calls with no time limits</h1>
+    <p class="subtitle">
+      Open a room, share the link, and meet — no downloads, no accounts for guests,
+      no 30-minute cutoffs.
+    </p>
+
+    <div class="room-form">
+      <input
+        type="text"
+        id="roomInput"
+        placeholder="Enter a room name (e.g. my-team)"
+        maxlength="50"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button id="joinBtn" onclick="joinRoom()">Start or Join →</button>
+    </div>
+
+    <p class="hint">Or share a link like: <code>meetfree.local/room/<strong>your-room</strong></code></p>
+
+    <div class="features">
+      <div class="feature">
+        <span>🔗</span>
+        <span>One-click join link</span>
+      </div>
+      <div class="feature">
+        <span>⏱️</span>
+        <span>Unlimited meeting time</span>
+      </div>
+      <div class="feature">
+        <span>🔒</span>
+        <span>Peer-to-peer encrypted</span>
+      </div>
+      <div class="feature">
+        <span>💻</span>
+        <span>No downloads needed</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Auto-focus the input
+    document.getElementById('roomInput').focus();
+
+    // Allow pressing Enter to join
+    document.getElementById('roomInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') joinRoom();
+    });
+
+    function joinRoom() {
+      const input = document.getElementById('roomInput').value.trim();
+      if (!input) {
+        document.getElementById('roomInput').classList.add('error');
+        setTimeout(() => document.getElementById('roomInput').classList.remove('error'), 600);
+        return;
+      }
+      // Slugify: lowercase, replace spaces with dashes, remove special chars
+      const roomId = input.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      window.location.href = `/room/${roomId}`;
+    }
+  </script>
+</body>
+</html>
