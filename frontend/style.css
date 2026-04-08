@@ -1,3 +1,7 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   MeetFree — Whereby-inspired Video Conferencing UI
+   Clean dark theme, responsive grid, Whereby-like control bar
+   ───────────────────────────────────────────────────────────────────────── */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -19,7 +23,8 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 body { background: var(--bg); color: var(--text); }
 
 
-/* Shared */
+/* ── Shared ─────────────────────────────────────────────────────────────── */
+
 .hidden { display: none !important; }
 
 .logo { display: flex; align-items: center; gap: 10px; }
@@ -29,7 +34,7 @@ body { background: var(--bg); color: var(--text); }
 .logo.small .logo-text { font-size: 1.2rem; }
 
 
-/* Landing Page */
+/* ── Landing Page ───────────────────────────────────────────────────────── */
 
 .landing-page {
   display: flex; align-items: center; justify-content: center;
@@ -91,7 +96,7 @@ h1 {
 }
 
 
-/* Pre-Call Modal */
+/* ── Pre-Call Modal ─────────────────────────────────────────────────────── */
 
 .modal-overlay {
   position: fixed; inset: 0;
@@ -142,7 +147,7 @@ h1 {
 .join-btn:hover { background: #6a45a0; transform: translateY(-1px); }
 
 
-/* Room Layout */
+/* ── Room Layout ────────────────────────────────────────────────────────── */
 
 .room-page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
@@ -151,7 +156,7 @@ h1 {
   padding-bottom: var(--bar-h);
 }
 
-/* Video Grid */
+/* ── Video Grid ─────────────────────────────────────────────────────────── */
 
 .video-grid {
   flex: 1; display: grid; gap: 6px; padding: 6px;
@@ -190,7 +195,7 @@ h1 {
 }
 
 
-/* Video Placeholder (camera off) */
+/* ── Video Placeholder (camera off) ────────────────────────────────────── */
 
 .video-placeholder {
   position: absolute; inset: 0;
@@ -202,7 +207,7 @@ h1 {
 .video-placeholder span { font-size: 2.5rem; }
 
 
-/* Chat Panel */
+/* ── Chat Panel ─────────────────────────────────────────────────────────── */
 
 .chat-panel {
   width: 300px; min-width: 260px;
@@ -257,7 +262,7 @@ h1 {
 }
 
 
-/* Control Bar */
+/* ── Control Bar ────────────────────────────────────────────────────────── */
 
 .control-bar {
   position: fixed; bottom: 0; left: 0; right: 0;
@@ -307,7 +312,7 @@ h1 {
 }
 
 
-/* Toast notification */
+/* ── Toast notification ─────────────────────────────────────────────────── */
 
 .toast {
   position: fixed; bottom: calc(var(--bar-h) + 16px); left: 50%;
@@ -333,14 +338,14 @@ h1 {
 }
 
 
-/* Scrollbar Styling */
+/* ── Scrollbar Styling ──────────────────────────────────────────────────── */
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 
-/* Responsive */
+/* ── Responsive ─────────────────────────────────────────────────────────── */
 
 @media (max-width: 600px) {
   .room-form { flex-direction: column; }
@@ -348,3 +353,86 @@ h1 {
   .video-grid.grid-many { grid-template-columns: 1fr 1fr; }
   .room-name-badge { display: none; }
 }
+
+/* ── Production additions ──────────────────────────────────────────────── */
+
+/* Error banner on landing page */
+.error-banner {
+  width: 100%; padding: 10px 16px; border-radius: 8px;
+  background: rgba(233,69,96,0.2); border: 1px solid var(--accent);
+  color: #ff8fa3; font-size: 0.9rem; text-align: center;
+  animation: fadeInUp 0.3s ease;
+}
+
+/* Spinner */
+.spinner {
+  display: inline-block; width: 18px; height: 18px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff; border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.spinner.large { width: 36px; height: 36px; border-width: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Auth modal */
+.auth-modal { gap: 1.5rem; text-align: center; }
+.auth-modal p { color: var(--text-muted); }
+
+/* Landing page: two-field form stacked */
+.room-form { flex-direction: column; }
+.room-form input { width: 100%; }
+.room-form button { width: 100%; }
+
+/* Name display in pre-call modal */
+.name-display {
+  font-size: 1rem; font-weight: 600; color: var(--text-muted);
+  text-align: center;
+}
+
+/* Control group: button + label stacked */
+.ctrl-group { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.ctrl-label { font-size: 0.65rem; color: var(--text-muted); user-select: none; }
+
+/* Participant count badge in control bar */
+.participant-count {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 0.82rem; color: var(--text-muted);
+  background: var(--surface2); padding: 4px 10px;
+  border-radius: 100px; border: 1px solid var(--border);
+}
+
+/* Connection quality indicator */
+.conn-quality {
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; cursor: default;
+}
+#qualityIcon { font-size: 1rem; }
+
+/* Tile overlay icons (mute, cam-off, hand) */
+.tile-overlay-icon {
+  position: absolute; font-size: 1rem;
+  background: rgba(0,0,0,0.6); border-radius: 50%;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+.mute-icon  { top: 10px; right: 10px; }
+.camoff-icon { top: 10px; right: 44px; }
+.hand-icon  { top: 10px; left: 10px; animation: bounce 0.6s infinite alternate; }
+
+@keyframes bounce {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-4px); }
+}
+
+/* Chat timestamp */
+.chat-ts {
+  font-size: 0.68rem; color: var(--text-muted);
+  align-self: flex-end; padding: 0 6px;
+}
+
+/* Screen share button active state */
+#screenBtn.active { background: #1a6b3a; border-color: #2ecc71; }
+
+/* Hand raise active */
+#handBtn.active { background: #6b4a00; border-color: #f39c12; }

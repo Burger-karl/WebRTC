@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>MeetFree — Unlimited Video Calls</title>
-  <link rel="stylesheet" href="/frontend/style.css" />
+  <link rel="stylesheet" href="/frontend/style.css"/>
 </head>
 <body class="landing-page">
 
@@ -16,63 +16,119 @@
 
     <h1>Video calls with no time limits</h1>
     <p class="subtitle">
-      Open a room, share the link, and meet — no downloads, no accounts for guests,
-      no 30-minute cutoffs.
+      Self-hosted, peer-to-peer, unlimited. No downloads, no accounts for guests.
     </p>
+
+    <!-- Error banner (shown on auth failure) -->
+    <div id="errorBanner" class="error-banner hidden"></div>
 
     <div class="room-form">
       <input
         type="text"
-        id="roomInput"
-        placeholder="Enter a room name (e.g. my-team)"
+        id="nameInput"
+        placeholder="Your name"
         maxlength="50"
+        autocomplete="name"
+        spellcheck="false"
+      />
+      <input
+        type="text"
+        id="roomInput"
+        placeholder="Room name (e.g. team-standup)"
+        maxlength="80"
         autocomplete="off"
         spellcheck="false"
       />
-      <button id="joinBtn" onclick="joinRoom()">Start or Join →</button>
+      <button id="joinBtn" onclick="joinRoom()">
+        <span id="joinBtnText">Start or Join →</span>
+        <span id="joinBtnSpinner" class="spinner hidden"></span>
+      </button>
     </div>
 
-    <p class="hint">Or share a link like: <code>meetfree.local/room/<strong>your-room</strong></code></p>
+    <p class="hint">
+      Share a link like: <code>meetfree.local/room/<strong>team-standup</strong></code>
+    </p>
 
     <div class="features">
-      <div class="feature">
-        <span>🔗</span>
-        <span>One-click join link</span>
-      </div>
-      <div class="feature">
-        <span>⏱️</span>
-        <span>Unlimited meeting time</span>
-      </div>
-      <div class="feature">
-        <span>🔒</span>
-        <span>Peer-to-peer encrypted</span>
-      </div>
-      <div class="feature">
-        <span>💻</span>
-        <span>No downloads needed</span>
-      </div>
+      <div class="feature"><span>🔒</span><span>JWT-secured rooms</span></div>
+      <div class="feature"><span>⏱️</span><span>Unlimited meeting time</span></div>
+      <div class="feature"><span>🌐</span><span>TURN relay for any network</span></div>
+      <div class="feature"><span>💻</span><span>No downloads needed</span></div>
     </div>
   </div>
 
   <script>
-    // Auto-focus the input
-    document.getElementById('roomInput').focus();
+    // Pre-fill from URL query params: ?room=xxx&name=yyy
+    (function() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('room'))  document.getElementById('roomInput').value = params.get('room');
+      if (params.get('name'))  document.getElementById('nameInput').value = params.get('name');
+      document.getElementById('nameInput').focus();
+    })();
 
-    // Allow pressing Enter to join
-    document.getElementById('roomInput').addEventListener('keydown', e => {
-      if (e.key === 'Enter') joinRoom();
+    ['nameInput','roomInput'].forEach(id => {
+      document.getElementById(id).addEventListener('keydown', e => {
+        if (e.key === 'Enter') joinRoom();
+      });
     });
 
-    function joinRoom() {
-      const input = document.getElementById('roomInput').value.trim();
-      if (!input) {
-        document.getElementById('roomInput').classList.add('error');
-        setTimeout(() => document.getElementById('roomInput').classList.remove('error'), 600);
-        return;
+    async function joinRoom() {
+      const name    = document.getElementById('nameInput').value.trim();
+      const rawRoom = document.getElementById('roomInput').value.trim();
+
+      if (!name) { showError('Please enter your name.'); return; }
+      if (!rawRoom) { showError('Please enter a room name.'); return; }
+
+      // Slugify room name
+      const room = rawRoom.toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,'');
+      if (!room) { showError('Room name must contain letters or numbers.'); return; }
+
+      setLoading(true);
+
+      try {
+        // The server validates input, checks room capacity, and returns a
+        // signed token plus the ICE server list (including TURN credentials).
+        const res = await fetch('/api/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, room }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          showError(data.error || 'Could not enter room. Please try again.');
+          setLoading(false);
+          return;
+        }
+
+        // We use sessionStorage so the token travels with the user to the
+        // room page without appearing in the URL.
+        sessionStorage.setItem('meetfree_token',      data.token);
+        sessionStorage.setItem('meetfree_ice',        JSON.stringify(data.iceServers));
+        sessionStorage.setItem('meetfree_name',       name);
+        sessionStorage.setItem('meetfree_room',       room);
+
+        window.location.href = '/room/' + room;
+
+      } catch (err) {
+        console.error(err);
+        showError('Network error. Is the server running?');
+        setLoading(false);
       }
-      // Slugify: lowercase, replace spaces with dashes, remove special chars
-      const roomId = input.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-      window.location.href = `/room/${roomId}`;
+    }
+
+    function showError(msg) {
+      const banner = document.getElementById('errorBanner');
+      banner.textContent = msg;
+      banner.classList.remove('hidden');
+      setTimeout(() => banner.classList.add('hidden'), 5000);
+    }
+
+    function setLoading(on) {
+      document.getElementById('joinBtnText').classList.toggle('hidden', on);
+      document.getElementById('joinBtnSpinner').classList.toggle('hidden', !on);
+      document.getElementById('joinBtn').disabled = on;
     }
   </script>
 </body>

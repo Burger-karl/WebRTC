@@ -3,44 +3,41 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>MeetFree — Room: {{ room_id }}</title>
+  <title>MeetFree — {{ room_id }}</title>
   <link rel="stylesheet" href="/frontend/style.css"/>
 </head>
 <body class="room-page">
 
-  <!-- Pre-call: Name Entry Modal -->
-  <div id="preCallModal" class="modal-overlay">
-    <div class="modal">
-      <div class="logo small">
-        <span class="logo-icon">📹</span>
-        <span class="logo-text">MeetFree</span>
-      </div>
+  <!-- ── Auth guard: shown while we fetch the token -->
+  <div id="authGuard" class="modal-overlay">
+    <div class="modal auth-modal">
+      <div class="logo small"><span class="logo-icon">📹</span><span class="logo-text">MeetFree</span></div>
+      <div class="spinner large"></div>
+      <p id="authStatus">Authenticating…</p>
+    </div>
+  </div>
 
+  <!-- ── Pre-call: Camera/Mic check -->
+  <div id="preCallModal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="logo small"><span class="logo-icon">📹</span><span class="logo-text">MeetFree</span></div>
       <h2>Ready to join?</h2>
       <p class="room-label">Room: <strong>{{ room_id }}</strong></p>
 
-      <!-- Local camera preview before joining -->
       <div class="preview-wrapper">
         <video id="previewVideo" autoplay muted playsinline></video>
         <div id="previewPlaceholder" class="video-placeholder">
-          <span>📷</span>
-          <p>Camera off</p>
+          <span>📷</span><p>Camera off</p>
         </div>
       </div>
 
-      <input
-        type="text"
-        id="nameInput"
-        placeholder="Your name"
-        maxlength="30"
-        autocomplete="off"
-      />
+      <p id="localNameDisplay" class="name-display"></p>
 
       <div class="pre-controls">
-        <button id="togglePreviewCam" class="ctrl-btn" onclick="togglePreviewCamera()">
+        <button class="ctrl-btn" onclick="togglePreviewCamera()" title="Toggle camera">
           <span id="previewCamIcon">📷</span>
         </button>
-        <button id="togglePreviewMic" class="ctrl-btn" onclick="togglePreviewMic()">
+        <button class="ctrl-btn" onclick="togglePreviewMic()" title="Toggle mic">
           <span id="previewMicIcon">🎙️</span>
         </button>
       </div>
@@ -49,15 +46,13 @@
     </div>
   </div>
 
-  <!-- Main Room Layout -->
+  <!-- ── Main Room -->
   <div id="roomContainer" class="room-container hidden">
 
     <!-- Video Grid -->
-    <div id="videoGrid" class="video-grid">
-      <!-- Video tiles are injected here by JS -->
-    </div>
+    <div id="videoGrid" class="video-grid grid-1"></div>
 
-    <!-- Sidebar: Chat -->
+    <!-- Chat Sidebar -->
     <div id="chatPanel" class="chat-panel hidden">
       <div class="chat-header">
         <span>Room Chat</span>
@@ -65,61 +60,92 @@
       </div>
       <div id="chatMessages" class="chat-messages"></div>
       <div class="chat-input-row">
-        <input
-          type="text"
-          id="chatInput"
-          placeholder="Message everyone..."
-          onkeydown="if(event.key==='Enter') sendChat()"
-        />
+        <input type="text" id="chatInput" placeholder="Message everyone…"
+               onkeydown="if(event.key==='Enter') sendChat()"/>
         <button onclick="sendChat()">Send</button>
       </div>
     </div>
 
   </div>
 
-  <!-- Control Bar -->
+  <!-- ── Control Bar -->
   <div id="controlBar" class="control-bar hidden">
+
     <div class="controls-left">
-      <span class="room-name-badge">{{ room_id }}</span>
+      <span class="room-name-badge" title="{{ room_id }}">{{ room_id }}</span>
+      <span id="participantCount" class="participant-count" title="Participants">
+        👥 <span id="participantNum">1</span>
+      </span>
     </div>
 
     <div class="controls-center">
-      <button id="micBtn" class="ctrl-btn active" onclick="toggleMic()" title="Mute/Unmute">
-        <span id="micIcon">🎙️</span>
-      </button>
+      <!-- Mic -->
+      <div class="ctrl-group">
+        <button id="micBtn" class="ctrl-btn active" onclick="toggleMic()" title="Mute/Unmute (M)">
+          <span id="micIcon">🎙️</span>
+        </button>
+        <span class="ctrl-label">Mic</span>
+      </div>
 
-      <button id="camBtn" class="ctrl-btn active" onclick="toggleCamera()" title="Camera on/off">
-        <span id="camIcon">📷</span>
-      </button>
+      <!-- Camera -->
+      <div class="ctrl-group">
+        <button id="camBtn" class="ctrl-btn active" onclick="toggleCamera()" title="Camera on/off (V)">
+          <span id="camIcon">📷</span>
+        </button>
+        <span class="ctrl-label">Camera</span>
+      </div>
 
-      <button id="screenBtn" class="ctrl-btn" onclick="toggleScreenShare()" title="Screen share">
-        <span>🖥️</span>
-      </button>
+      <!-- Screen share -->
+      <div class="ctrl-group">
+        <button id="screenBtn" class="ctrl-btn" onclick="toggleScreenShare()" title="Share screen (S)">
+          <span id="screenIcon">🖥️</span>
+        </button>
+        <span class="ctrl-label">Share</span>
+      </div>
 
-      <button class="ctrl-btn danger" onclick="leaveCall()" title="Leave meeting">
-        <span>📵</span>
-      </button>
+      <!-- Raise hand -->
+      <div class="ctrl-group">
+        <button id="handBtn" class="ctrl-btn" onclick="toggleHand()" title="Raise/lower hand (H)">
+          <span id="handIcon">✋</span>
+        </button>
+        <span class="ctrl-label">Hand</span>
+      </div>
+
+      <!-- Leave -->
+      <div class="ctrl-group">
+        <button class="ctrl-btn danger" onclick="leaveCall()" title="Leave meeting">
+          <span>📵</span>
+        </button>
+        <span class="ctrl-label">Leave</span>
+      </div>
     </div>
 
     <div class="controls-right">
-      <button class="ctrl-btn" onclick="toggleChat()" title="Chat">
+      <!-- Chat toggle with unread badge -->
+      <button class="ctrl-btn" onclick="toggleChat()" title="Chat (C)">
         💬
         <span id="chatBadge" class="badge hidden">0</span>
       </button>
 
+      <!-- Copy invite link -->
       <button class="ctrl-btn" onclick="copyRoomLink()" title="Copy invite link" id="copyBtn">
         🔗
       </button>
+
+      <!-- Connection quality indicator -->
+      <div id="connQuality" class="conn-quality" title="Connection quality">
+        <span id="qualityIcon">📶</span>
+      </div>
     </div>
+
   </div>
 
-  <!-- Toast notification -->
+  <!-- Toast -->
   <div id="toast" class="toast hidden"></div>
 
-  <!-- Scripts -->
+  <!-- ── Scripts -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
   <script>
-    // Inject the room ID from Flask into JS
     const ROOM_ID = "{{ room_id }}";
   </script>
   <script src="/frontend/app.js"></script>
