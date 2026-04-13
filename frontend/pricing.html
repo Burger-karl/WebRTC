@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — Pricing</title>
+  <link rel="stylesheet" href="/frontend/style.css"/>
+</head>
+<body class="landing-page">
+
+  <div class="landing-container pricing-container">
+    <div class="logo" style="justify-content:center;margin-bottom:0.5rem">
+      <span class="logo-icon">📹</span>
+      <span class="logo-text">MeetFree</span>
+    </div>
+
+    <h1>Simple, honest pricing</h1>
+    <p class="subtitle">Start free for 14 days. No credit card required.</p>
+
+    <div id="pricingError" class="error-banner hidden"></div>
+
+    <!-- Billing toggle -->
+    <div class="billing-toggle">
+      <span id="lblMonthly" class="toggle-label active">Monthly</span>
+      <label class="toggle-switch">
+        <input type="checkbox" id="billingToggle" onchange="switchBilling()"/>
+        <span class="toggle-slider"></span>
+      </label>
+      <span id="lblYearly" class="toggle-label">Yearly <span class="save-badge">Save 31%</span></span>
+    </div>
+
+    <!-- Pricing Cards -->
+    <div class="pricing-cards">
+
+      <!-- Free Trial -->
+      <div class="pricing-card">
+        <div class="plan-name">Free Trial</div>
+        <div class="plan-price">$0<span class="plan-period">/14 days</span></div>
+        <ul class="plan-features">
+          <li>✅ Unlimited meeting time</li>
+          <li>✅ Up to 100 participants</li>
+          <li>✅ Screen sharing</li>
+          <li>✅ In-room chat</li>
+          <li>✅ Lobby / waiting room</li>
+          <li>❌ No credit card required</li>
+        </ul>
+        <a href="/" class="plan-btn secondary-btn">Start Free Trial →</a>
+      </div>
+
+      <!-- Pro -->
+      <div class="pricing-card featured">
+        <div class="plan-badge">Most Popular</div>
+        <div class="plan-name">Pro</div>
+        <div id="proPrice" class="plan-price">$12<span class="plan-period">/month</span></div>
+        <ul class="plan-features">
+          <li>✅ Everything in Free</li>
+          <li>✅ Unlimited rooms</li>
+          <li>✅ Custom room URLs</li>
+          <li>✅ TURN relay (corporate networks)</li>
+          <li>✅ Priority support</li>
+          <li>✅ Recording (coming soon)</li>
+        </ul>
+
+        <div class="checkout-form">
+          <input
+            type="email"
+            id="checkoutEmail"
+            placeholder="your@email.com"
+            autocomplete="email"
+          />
+          <button
+            id="checkoutBtn"
+            class="plan-btn primary-btn"
+            onclick="startCheckout()"
+          >
+            <span id="checkoutBtnText">Subscribe Now →</span>
+            <span id="checkoutSpinner" class="spinner hidden"></span>
+          </button>
+        </div>
+        <p class="secure-note">🔒 Powered by Stripe. Cancel anytime.</p>
+      </div>
+
+    </div><!-- /pricing-cards -->
+
+    <!-- FAQ -->
+    <div class="faq">
+      <div class="faq-item">
+        <strong>Can I cancel anytime?</strong>
+        <p>Yes. Cancel from your Stripe billing portal at any time. You keep access until the end of your billing period.</p>
+      </div>
+      <div class="faq-item">
+        <strong>What payment methods are accepted?</strong>
+        <p>All major credit and debit cards (Visa, Mastercard, Amex) via Stripe. No PayPal.</p>
+      </div>
+      <div class="faq-item">
+        <strong>Is my card information stored?</strong>
+        <p>No. Card data is handled entirely by Stripe and never touches our servers.</p>
+      </div>
+    </div>
+
+    <p style="text-align:center;margin-top:1.5rem">
+      <a href="/" style="color:var(--text-muted);font-size:0.85rem">← Back to MeetFree</a>
+    </p>
+  </div>
+
+  <script>
+    // Injected by Flask/Jinja2
+    const STRIPE_PUBLISHABLE_KEY = "{{ stripe_publishable_key }}";
+    const PRICE_MONTHLY          = "{{ price_monthly }}";
+    const PRICE_YEARLY           = "{{ price_yearly }}";
+
+    let currentPlan = 'monthly';
+
+    function switchBilling() {
+      const yearly = document.getElementById('billingToggle').checked;
+      currentPlan  = yearly ? 'yearly' : 'monthly';
+      document.getElementById('lblMonthly').classList.toggle('active', !yearly);
+      document.getElementById('lblYearly').classList.toggle('active', yearly);
+      document.getElementById('proPrice').innerHTML = yearly
+        ? '$99<span class="plan-period">/year</span>'
+        : '$12<span class="plan-period">/month</span>';
+    }
+
+    async function startCheckout() {
+      const email = document.getElementById('checkoutEmail').value.trim();
+      if (!email || !email.includes('@')) {
+        showError('Please enter a valid email address.');
+        return;
+      }
+
+      setLoading(true);
+
+      try {
+        const res = await fetch('/api/create-checkout', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ email, plan: currentPlan }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          showError(data.error || 'Could not start checkout. Please try again.');
+          setLoading(false);
+          return;
+        }
+
+        // Redirect to Stripe's hosted checkout page
+        window.location.href = data.url;
+
+      } catch (err) {
+        console.error(err);
+        showError('Network error. Please try again.');
+        setLoading(false);
+      }
+    }
+
+    // Allow Enter key on email field
+    document.getElementById('checkoutEmail').addEventListener('keydown', e => {
+      if (e.key === 'Enter') startCheckout();
+    });
+
+    function showError(msg) {
+      const el = document.getElementById('pricingError');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      setTimeout(() => el.classList.add('hidden'), 5000);
+    }
+
+    function setLoading(on) {
+      document.getElementById('checkoutBtnText').classList.toggle('hidden', on);
+      document.getElementById('checkoutSpinner').classList.toggle('hidden', !on);
+      document.getElementById('checkoutBtn').disabled = on;
+    }
+  </script>
+</body>
+</html>

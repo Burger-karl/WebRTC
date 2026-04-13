@@ -9,36 +9,24 @@
 <body class="landing-page">
 
   <div class="landing-container">
+
     <div class="logo">
       <span class="logo-icon">📹</span>
       <span class="logo-text">MeetFree</span>
     </div>
 
-    <h1>Video calls with no time limits</h1>
-    <p class="subtitle">
-      Self-hosted, peer-to-peer, unlimited. No downloads, no accounts for guests.
-    </p>
+    <!-- Pricing nav link -->
+    <a href="/pricing" class="pricing-nav-link">View Plans & Pricing →</a>
 
-    <!-- Error banner (shown on auth failure) -->
+    <h1>Video calls with no time limits</h1>
+    <p class="subtitle">Self-hosted, peer-to-peer, unlimited. No downloads for guests.</p>
+
     <div id="errorBanner" class="error-banner hidden"></div>
 
     <div class="room-form">
-      <input
-        type="text"
-        id="nameInput"
-        placeholder="Your name"
-        maxlength="50"
-        autocomplete="name"
-        spellcheck="false"
-      />
-      <input
-        type="text"
-        id="roomInput"
-        placeholder="Room name (e.g. team-standup)"
-        maxlength="80"
-        autocomplete="off"
-        spellcheck="false"
-      />
+      <input type="text"  id="nameInput"  placeholder="Your name"              maxlength="50"  autocomplete="name"  spellcheck="false"/>
+      <input type="email" id="emailInput" placeholder="Your email (for billing)" maxlength="120" autocomplete="email" spellcheck="false"/>
+      <input type="text"  id="roomInput"  placeholder="Room name (e.g. team-standup)" maxlength="80" autocomplete="off" spellcheck="false"/>
       <button id="joinBtn" onclick="joinRoom()">
         <span id="joinBtnText">Start or Join →</span>
         <span id="joinBtnSpinner" class="spinner hidden"></span>
@@ -46,27 +34,31 @@
     </div>
 
     <p class="hint">
-      Share a link like: <code>meetfree.local/room/<strong>team-standup</strong></code>
+      Share a link: <code>meetfree.local/room/<strong>team-standup</strong></code>
     </p>
 
     <div class="features">
       <div class="feature"><span>🔒</span><span>JWT-secured rooms</span></div>
+      <div class="feature"><span>🚪</span><span>Lobby waiting room</span></div>
       <div class="feature"><span>⏱️</span><span>Unlimited meeting time</span></div>
-      <div class="feature"><span>🌐</span><span>TURN relay for any network</span></div>
-      <div class="feature"><span>💻</span><span>No downloads needed</span></div>
+      <div class="feature"><span>💳</span><span>14-day free trial</span></div>
     </div>
   </div>
 
   <script>
-    // Pre-fill from URL query params: ?room=xxx&name=yyy
     (function() {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('room'))  document.getElementById('roomInput').value = params.get('room');
-      if (params.get('name'))  document.getElementById('nameInput').value = params.get('name');
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('room'))  document.getElementById('roomInput').value  = p.get('room');
+      if (p.get('name'))  document.getElementById('nameInput').value  = p.get('name');
+      if (p.get('email')) document.getElementById('emailInput').value = p.get('email');
+      if (p.get('error') === 'session_expired') {
+        document.getElementById('errorBanner').textContent = 'Your session expired. Please sign in again.';
+        document.getElementById('errorBanner').classList.remove('hidden');
+      }
       document.getElementById('nameInput').focus();
     })();
 
-    ['nameInput','roomInput'].forEach(id => {
+    ['nameInput','emailInput','roomInput'].forEach(id => {
       document.getElementById(id).addEventListener('keydown', e => {
         if (e.key === 'Enter') joinRoom();
       });
@@ -74,27 +66,30 @@
 
     async function joinRoom() {
       const name    = document.getElementById('nameInput').value.trim();
+      const email   = document.getElementById('emailInput').value.trim();
       const rawRoom = document.getElementById('roomInput').value.trim();
 
-      if (!name) { showError('Please enter your name.'); return; }
-      if (!rawRoom) { showError('Please enter a room name.'); return; }
+      if (!name)    { showError('Please enter your name.');      return; }
+      if (!rawRoom) { showError('Please enter a room name.');    return; }
 
-      // Slugify room name
       const room = rawRoom.toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,'');
       if (!room) { showError('Room name must contain letters or numbers.'); return; }
 
       setLoading(true);
 
       try {
-        // The server validates input, checks room capacity, and returns a
-        // signed token plus the ICE server list (including TURN credentials).
-        const res = await fetch('/api/token', {
-          method: 'POST',
+        const res  = await fetch('/api/token', {
+          method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, room }),
+          body:    JSON.stringify({ name, email, room }),
         });
-
         const data = await res.json();
+
+        if (res.status === 402) {
+          // Subscription expired — send to pricing page
+          window.location.href = '/pricing?email=' + encodeURIComponent(email);
+          return;
+        }
 
         if (!res.ok) {
           showError(data.error || 'Could not enter room. Please try again.');
@@ -102,27 +97,25 @@
           return;
         }
 
-        // We use sessionStorage so the token travels with the user to the
-        // room page without appearing in the URL.
-        sessionStorage.setItem('meetfree_token',      data.token);
-        sessionStorage.setItem('meetfree_ice',        JSON.stringify(data.iceServers));
-        sessionStorage.setItem('meetfree_name',       name);
-        sessionStorage.setItem('meetfree_room',       room);
+        sessionStorage.setItem('meetfree_token', data.token);
+        sessionStorage.setItem('meetfree_ice',   JSON.stringify(data.iceServers));
+        sessionStorage.setItem('meetfree_name',  name);
+        sessionStorage.setItem('meetfree_email', email);
+        sessionStorage.setItem('meetfree_room',  room);
 
         window.location.href = '/room/' + room;
 
       } catch (err) {
-        console.error(err);
         showError('Network error. Is the server running?');
         setLoading(false);
       }
     }
 
     function showError(msg) {
-      const banner = document.getElementById('errorBanner');
-      banner.textContent = msg;
-      banner.classList.remove('hidden');
-      setTimeout(() => banner.classList.add('hidden'), 5000);
+      const b = document.getElementById('errorBanner');
+      b.textContent = msg;
+      b.classList.remove('hidden');
+      setTimeout(() => b.classList.add('hidden'), 5000);
     }
 
     function setLoading(on) {

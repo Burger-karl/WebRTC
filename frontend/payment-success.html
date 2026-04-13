@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — Payment Successful</title>
+  <link rel="stylesheet" href="/frontend/style.css"/>
+</head>
+<body class="landing-page">
+  <div class="landing-container" style="text-align:center;max-width:480px">
+    <div class="logo" style="justify-content:center;margin-bottom:1.5rem">
+      <span class="logo-icon">📹</span>
+      <span class="logo-text">MeetFree</span>
+    </div>
+
+    <div style="font-size:4rem;margin-bottom:1rem">🎉</div>
+    <h1 style="font-size:1.8rem">You're all set!</h1>
+
+    <p class="subtitle">
+      {% if email %}
+        Your <strong>{{ plan }}</strong> subscription is now active for
+        <strong>{{ email }}</strong>.
+      {% else %}
+        Your subscription is now active. You have full access to MeetFree.
+      {% endif %}
+    </p>
+
+    <div class="features" style="justify-content:center;margin:1.5rem 0">
+      <div class="feature"><span>⏱️</span><span>Unlimited meetings</span></div>
+      <div class="feature"><span>👥</span><span>100 participants</span></div>
+      <div class="feature"><span>🔒</span><span>Secure & encrypted</span></div>
+    </div>
+
+    <a href="/" class="join-btn" style="display:inline-block;text-decoration:none;padding:14px 32px">
+      Start a Meeting →
+    </a>
+
+    <p style="margin-top:1.5rem;color:var(--text-muted);font-size:0.82rem">
+      A receipt has been sent to your email by Stripe.<br/>
+      To manage your subscription, visit your
+      <a href="https://billing.stripe.com" target="_blank" style="color:var(--accent2)">Stripe billing portal</a>.
+    </p>
+  </div>
+</body>
+</html>
