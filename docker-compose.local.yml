@@ -1,10 +1,30 @@
+version: '3.9'
 
-
-# MeetFree - LOCAL TESTING Docker Compose (HTTP only, no SSL)
+# MeetFree — LOCAL TESTING (feature-dev branch)
+# Adds MySQL service for chat history, room passwords, host mute persistence.
 # Usage: docker-compose -f docker-compose.local.yml up --build
 # App:   http://localhost
 
 services:
+
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password_local
+      MYSQL_DATABASE:      meetfree
+      MYSQL_USER:          meetfree
+      MYSQL_PASSWORD:      meetfree_local_password
+    ports:
+      - "3306:3306"   # expose for inspection with MySQL Workbench or DBeaver
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "meetfree", "-pmeetfree_local_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s   # MySQL takes a moment to initialise on first run
 
   redis:
     image: redis:7-alpine
@@ -25,13 +45,19 @@ services:
     restart: unless-stopped
     env_file: backend/.env.local
     environment:
-      REDIS_URL: redis://redis:6379/0
-      FLASK_ENV: development
-      # FIX: ensures config.py and auth.py are importable from server.py
-      # Python sees /app/backend on its path, so `from config import cfg` works
-      PYTHONPATH: /app/backend
+      REDIS_URL:       redis://redis:6379/0
+      MYSQL_HOST:      mysql
+      MYSQL_PORT:      3306
+      MYSQL_USER:      meetfree
+      MYSQL_PASSWORD:  meetfree_local_password
+      MYSQL_DATABASE:  meetfree
+      MYSQL_ENABLED:   "true"
+      FLASK_ENV:       development
+      PYTHONPATH:      /app/backend
     depends_on:
       redis:
+        condition: service_healthy
+      mysql:
         condition: service_healthy
     command: >
       gunicorn
@@ -63,4 +89,5 @@ services:
       - meetfree
 
 volumes:
+  mysql_data:
   redis_data:

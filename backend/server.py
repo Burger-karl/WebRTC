@@ -1,3 +1,25 @@
+"""
+server.py — MeetFree Signaling Server (feature-dev branch)
+
+New features in this version:
+  1. Persistent Chat (MySQL)
+       - Every chat message is saved to MySQL via database.save_message()
+       - When a user joins, the last 50 messages are sent via 'chat_history'
+       - Messages survive page refresh and reconnection
+
+  2. Room Passwords
+       - POST /api/check-room  — tells the client if a room needs a password
+       - POST /api/token       — now accepts 'password' field and validates it
+       - Password is bcrypt-hashed in MySQL via database.create_room()
+       - First joiner sets the password (can be blank = open room)
+
+  3. Host Controls — Remote Mute
+       - Socket event 'mute_participant': host can force-mute any participant
+       - Socket event 'unmute_participant': host can remove the mute
+       - Muted participant receives 'you_were_muted' and their mic is disabled
+       - Mute state is persisted to MySQL for late joiners
+       - Kick (remove_participant) was already implemented — kept here
+"""
 
 import logging
 import os
@@ -16,6 +38,7 @@ from auth import (
     require_auth,
 )
 from payments import payments_bp, is_subscribed
+import database as db
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -43,37 +66,27 @@ socketio = SocketIO(
     engineio_logger=cfg.DEBUG,
 )
 
-# ── State ─────────────────────────────────────────────────────────────────────
-# BUG 1 FIX: Use plain dicts instead of defaultdict.
-# defaultdict(dict) auto-creates a key on any read access, including the
-# "if not rooms[room_id]" empty-room check. That silently created a new
-# empty entry for every user who arrived at an empty room, causing every
-# one of them to pass the "empty room" check and become admin.
-# With a plain dict, we use .get() for reads and only write explicitly.
-
-# rooms[room_id] = { sid: { name, joined_at, is_admin } }
-rooms: dict = {}
-
-# lobby[room_id] = { sid: { name, requested_at } }
-lobby: dict = {}
-
-# room_admins[room_id] = sid
-room_admins: dict = {}
-
-# Rate limiter: { ip: [timestamps] }
+# ── In-memory state ───────────────────────────────────────────────────────────
+rooms:       dict = {}   # room_id → { sid: { name, joined_at, is_admin } }
+lobby:       dict = {}   # room_id → { sid: { name, requested_at } }
+room_admins: dict = {}   # room_id → sid
 _rate_buckets: dict = {}
 
 
 def _check_rate_limit(ip: str) -> bool:
-    now = time.time()
-    bucket = _rate_buckets.get(ip, [])
-    bucket = [t for t in bucket if now - t < 60]
+    now    = time.time()
+    bucket = [t for t in _rate_buckets.get(ip, []) if now - t < 60]
     if len(bucket) >= cfg.RATE_LIMIT_PER_MINUTE:
         _rate_buckets[ip] = bucket
         return False
     bucket.append(now)
     _rate_buckets[ip] = bucket
     return True
+
+
+# ── Initialise MySQL on startup ───────────────────────────────────────────────
+with app.app_context():
+    db.init_db(cfg)
 
 
 # ── HTTP Routes ───────────────────────────────────────────────────────────────
@@ -96,31 +109,76 @@ def health():
         "active_peers":  sum(len(v) for v in rooms.values()),
         "lobby_waiting": sum(len(v) for v in lobby.values()),
         "redis":         bool(cfg.REDIS_URL),
+        "mysql":         db._db_available,
+    })
+
+
+@app.route('/api/check-room', methods=['POST'])
+def check_room():
+    """
+    FEATURE 2 — Room Passwords.
+    Called by the landing page before issuing a token so the UI can
+    show a password field if the room is password-protected.
+
+    Request:  { "room": "my-room" }
+    Response: { "exists": true, "hasPassword": true }
+
+    The client uses this to conditionally show the password input.
+    """
+    data    = request.get_json(silent=True) or {}
+    room_id = str(data.get("room", "")).strip()
+
+    if not room_id:
+        return jsonify({"error": "room is required"}), 400
+
+    # Check if room is live (someone is in it right now)
+    room_is_live = bool(rooms.get(room_id))
+
+    # Check if room has a DB record with a password
+    has_password = False
+    if room_is_live and db._db_available:
+        room_record = db.get_room(cfg, room_id)
+        has_password = bool(room_record and room_record.get('password_hash'))
+
+    return jsonify({
+        "exists":      room_is_live,
+        "hasPassword": has_password,
     })
 
 
 @app.route('/api/token', methods=['POST'])
 def issue_token():
-    """Issue a signed JWT. Checks Stripe subscription if configured."""
+    """
+    Issue a signed JWT.
+    FEATURE 2: Now validates room password if one is set.
+    """
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     ip = ip.split(',')[0].strip()
 
     if not _check_rate_limit(ip):
         return jsonify({"error": "Too many requests. Please try again."}), 429
 
-    data    = request.get_json(silent=True) or {}
-    name    = str(data.get("name", "")).strip()
-    room_id = str(data.get("room", "")).strip()
-    email   = str(data.get("email", "")).strip().lower()
+    data     = request.get_json(silent=True) or {}
+    name     = str(data.get("name", "")).strip()
+    room_id  = str(data.get("room", "")).strip()
+    email    = str(data.get("email", "")).strip().lower()
+    password = str(data.get("password", "")).strip()
 
     valid, error = validate_token_request(name, room_id)
     if not valid:
         return jsonify({"error": error}), 400
 
-    # BUG 1 FIX: use .get() not direct key access
     if len(rooms.get(room_id, {})) >= cfg.MAX_USERS_PER_ROOM:
         return jsonify({"error": f"Room is full (max {cfg.MAX_USERS_PER_ROOM})."}), 403
 
+    # ── FEATURE 2: Password check ─────────────────────────────
+    # Only check password if the room is currently live (someone is in it).
+    # If the room is empty, the joiner becomes host and can set a password.
+    if rooms.get(room_id):
+        if not db.verify_room_password(cfg, room_id, password):
+            return jsonify({"error": "Incorrect room password."}), 403
+
+    # ── Stripe subscription check ─────────────────────────────
     if cfg.STRIPE_SECRET_KEY and email:
         allowed, reason = is_subscribed(email)
         if not allowed:
@@ -129,7 +187,6 @@ def issue_token():
                 "reason":     reason,
                 "redirectTo": "/pricing",
             }), 402
-        logger.info(f"[TOKEN] Subscription OK for {email}: {reason}")
 
     token = create_token(name, room_id)
     logger.info(f"[TOKEN] Issued: name='{name}' room='{room_id}' ip={ip}")
@@ -156,16 +213,12 @@ def handle_disconnect():
     session = get_session(sid)
     name    = session.get('sub', 'unknown') if session else 'unknown'
 
-    # BUG 1 FIX: iterate over a snapshot with list(); use plain dict so no
-    # phantom keys are created. Only rooms that actually contain this sid
-    # will match — no ghost empty rooms to iterate over.
     for room_id, peers in list(rooms.items()):
         if sid in peers:
             del peers[sid]
             emit('peer_left', {'peerId': sid}, to=room_id)
             logger.info(f"[LEAVE] '{name}' left '{room_id}' | {len(peers)} remaining")
 
-            # If the admin left, promote the next peer
             if room_admins.get(room_id) == sid:
                 del room_admins[room_id]
                 if peers:
@@ -173,21 +226,22 @@ def handle_disconnect():
                     room_admins[room_id] = new_admin_sid
                     emit('you_are_admin', {}, to=new_admin_sid)
                     emit('admin_changed', {'newAdminId': new_admin_sid}, to=room_id)
-                    logger.info(f"[LOBBY] New admin: {peers[new_admin_sid]['name']} in '{room_id}'")
+                    logger.info(f"[HOST] New host: {peers[new_admin_sid]['name']} in '{room_id}'")
 
-            # Clean up empty rooms
             if not peers:
                 del rooms[room_id]
                 lobby.pop(room_id, None)
                 room_admins.pop(room_id, None)
+                # FEATURE 1: Clean up chat history when room is permanently closed
+                # Comment out the next line if you want to keep history forever
+                db.delete_room_history(cfg, room_id)
+                # FEATURE 2: Remove room password record when room closes
+                db.delete_room(cfg, room_id)
             break
 
-    # Remove from lobby if they disconnected while waiting
     for room_id, waiters in list(lobby.items()):
         if sid in waiters:
             del waiters[sid]
-            logger.info(f"[LOBBY] '{name}' left lobby for '{room_id}'")
-            # Clean up empty lobby entries
             if not waiters:
                 lobby.pop(room_id, None)
             break
@@ -195,66 +249,54 @@ def handle_disconnect():
     clear_session(sid)
 
 
-# ── Socket.IO: Lobby (Waiting Room) ──────────────────────────────────────────
+# ── Socket.IO: Lobby ──────────────────────────────────────────────────────────
 
 @socketio.on('request_join')
 @require_auth
 def handle_request_join(data, _session):
     """
     User requests entry to a room.
-
-    BUG 1 FIX: Use rooms.get(room_id) instead of rooms[room_id].
-    The old code used rooms[room_id] on a defaultdict, which auto-created
-    an empty dict for any new room_id. Every arriving user saw an empty
-    dict and became admin. Now we read with .get() which never creates keys.
-
-    BUG 2 FIX: Legacy 'join' handler removed. Only 'request_join' exists.
-    This eliminates the double-admission path where a reconnecting client
-    fired both events and got admitted twice.
+    FEATURE 2: First joiner also sends optional room password to set.
+    FEATURE 1: On admission, room chat history is sent to the new user.
     """
-    sid     = request.sid
-    name    = _session['sub']
-    room_id = _session['room']
+    sid      = request.sid
+    name     = _session['sub']
+    room_id  = _session['room']
+    password = str(data.get("password", "")).strip()
 
-    # BUG 3 FIX: early exit if this sid is somehow already in the room
-    # (defensive guard against any double-fire edge case)
     if sid in rooms.get(room_id, {}):
-        logger.warning(f"[JOIN] '{name}' (sid={sid}) already in '{room_id}' — ignoring duplicate request_join")
+        logger.warning(f"[JOIN] Duplicate request_join from '{name}' — ignoring")
         return
 
-    # BUG 1 FIX: rooms.get() never creates a phantom empty entry
     room_is_empty = not rooms.get(room_id)
 
     if room_is_empty:
-        # First joiner: create the room and become admin
-        rooms[room_id] = {}
+        # ── First joiner: create room, become host ────────────
+        rooms[room_id]       = {}
         room_admins[room_id] = sid
+
+        # FEATURE 2: Register room with optional password in DB
+        db.create_room(cfg, room_id, created_by=name, password=password or None)
+
         _admit_to_room(sid, name, room_id)
         emit('you_are_admin', {})
-        logger.info(f"[LOBBY] '{name}' created room '{room_id}' as admin")
+        logger.info(f"[HOST] '{name}' created room '{room_id}' | password={'set' if password else 'none'}")
     else:
-        # Room exists: send to lobby
+        # ── Room exists: send to lobby ────────────────────────
         if room_id not in lobby:
             lobby[room_id] = {}
-        lobby[room_id][sid] = {
-            'name':         name,
-            'requested_at': time.time(),
-        }
+        lobby[room_id][sid] = {'name': name, 'requested_at': time.time()}
         join_room(f"lobby_{room_id}")
-        emit('waiting_for_approval', {
-            'message': 'Please wait — the host will let you in shortly.',
-        })
-        # Notify the admin
+        emit('waiting_for_approval', {'message': 'Please wait — the host will let you in shortly.'})
         admin_sid = room_admins.get(room_id)
         if admin_sid:
             emit('lobby_request', {'peerId': sid, 'name': name}, to=admin_sid)
-        logger.info(f"[LOBBY] '{name}' is waiting to join '{room_id}'")
+        logger.info(f"[LOBBY] '{name}' waiting to join '{room_id}'")
 
 
 @socketio.on('admit_user')
 @require_auth
 def handle_admit_user(data, _session):
-    """Admin admits a waiting user into the room."""
     sid        = request.sid
     room_id    = _session['room']
     target_sid = data.get('peerId')
@@ -272,22 +314,14 @@ def handle_admit_user(data, _session):
     if not lobby[room_id]:
         del lobby[room_id]
 
-    waiter_name = waiter['name']
-
-    emit('admission_result', {
-        'admitted': True,
-        'message':  'You have been admitted to the meeting.',
-    }, to=target_sid)
-
-    _admit_to_room(target_sid, waiter_name, room_id)
-
-    logger.info(f"[LOBBY] '{_session['sub']}' admitted '{waiter_name}' to '{room_id}'")
+    emit('admission_result', {'admitted': True, 'message': 'You have been admitted.'}, to=target_sid)
+    _admit_to_room(target_sid, waiter['name'], room_id)
+    logger.info(f"[LOBBY] '{_session['sub']}' admitted '{waiter['name']}' to '{room_id}'")
 
 
 @socketio.on('deny_user')
 @require_auth
 def handle_deny_user(data, _session):
-    """Admin denies a waiting user."""
     sid        = request.sid
     room_id    = _session['room']
     target_sid = data.get('peerId')
@@ -298,22 +332,17 @@ def handle_deny_user(data, _session):
 
     room_lobby = lobby.get(room_id, {})
     if target_sid in room_lobby:
-        waiter_name = room_lobby[target_sid]['name']
-        del room_lobby[target_sid]
+        waiter_name = room_lobby.pop(target_sid)['name']
         if not room_lobby:
             lobby.pop(room_id, None)
-
-        emit('admission_result', {
-            'admitted': False,
-            'message':  'The host has denied your request to join.',
-        }, to=target_sid)
-        logger.info(f"[LOBBY] '{_session['sub']}' denied '{waiter_name}' from '{room_id}'")
+        emit('admission_result', {'admitted': False, 'message': 'The host denied your request.'}, to=target_sid)
+        logger.info(f"[LOBBY] '{_session['sub']}' denied '{waiter_name}'")
 
 
 @socketio.on('remove_participant')
 @require_auth
 def handle_remove_participant(data, _session):
-    """Admin removes (kicks) a live participant."""
+    """FEATURE 3: Host kicks a participant."""
     sid        = request.sid
     room_id    = _session['room']
     target_sid = data.get('peerId')
@@ -323,72 +352,170 @@ def handle_remove_participant(data, _session):
         return
 
     if target_sid in rooms.get(room_id, {}):
-        emit('you_were_removed', {
-            'message': 'You have been removed from the meeting by the host.'
-        }, to=target_sid)
-        logger.info(f"[LOBBY] '{_session['sub']}' removed "
-                    f"'{rooms[room_id][target_sid]['name']}' from '{room_id}'")
+        target_name = rooms[room_id][target_sid]['name']
+        emit('you_were_removed', {'message': 'You have been removed by the host.'}, to=target_sid)
+        logger.info(f"[HOST] '{_session['sub']}' removed '{target_name}' from '{room_id}'")
+
+
+# ── FEATURE 3: Host Controls — Remote Mute ────────────────────────────────────
+
+@socketio.on('mute_participant')
+@require_auth
+def handle_mute_participant(data, _session):
+    """
+    Host force-mutes a participant.
+    The target receives 'you_were_muted' and their client disables the mic.
+    Mute state is persisted to MySQL for late joiners.
+    """
+    sid        = request.sid
+    room_id    = _session['room']
+    target_sid = data.get('peerId')
+
+    if room_admins.get(room_id) != sid:
+        emit('error', {'code': 'NOT_ADMIN', 'message': 'Only the host can mute participants.'})
+        return
+
+    if target_sid not in rooms.get(room_id, {}):
+        return
+
+    target_name = rooms[room_id][target_sid]['name']
+
+    # Tell the target their mic is being muted
+    emit('you_were_muted', {
+        'by':      _session['sub'],
+        'message': f"You were muted by {_session['sub']}",
+    }, to=target_sid)
+
+    # Tell everyone else to show a mute indicator on that tile
+    emit('participant_muted', {
+        'peerId':   target_sid,
+        'name':     target_name,
+        'isMuted':  True,
+        'by':       _session['sub'],
+    }, to=room_id, skip_sid=target_sid)
+
+    # Persist mute state to DB
+    db.set_participant_muted(cfg, room_id, target_name, is_muted=True)
+
+    logger.info(f"[HOST] '{_session['sub']}' muted '{target_name}' in '{room_id}'")
+
+
+@socketio.on('unmute_participant')
+@require_auth
+def handle_unmute_participant(data, _session):
+    """
+    Host removes the force-mute from a participant.
+    Note: this sends a REQUEST to unmute — the participant's client
+    re-enables the mic. We cannot force a browser to open a mic without
+    user consent (browser security policy).
+    """
+    sid        = request.sid
+    room_id    = _session['room']
+    target_sid = data.get('peerId')
+
+    if room_admins.get(room_id) != sid:
+        emit('error', {'code': 'NOT_ADMIN', 'message': 'Only the host can unmute participants.'})
+        return
+
+    if target_sid not in rooms.get(room_id, {}):
+        return
+
+    target_name = rooms[room_id][target_sid]['name']
+
+    emit('you_were_unmuted', {
+        'by':      _session['sub'],
+        'message': f"You were unmuted by {_session['sub']}",
+    }, to=target_sid)
+
+    emit('participant_muted', {
+        'peerId':  target_sid,
+        'name':    target_name,
+        'isMuted': False,
+        'by':      _session['sub'],
+    }, to=room_id, skip_sid=target_sid)
+
+    db.set_participant_muted(cfg, room_id, target_name, is_muted=False)
+
+    logger.info(f"[HOST] '{_session['sub']}' unmuted '{target_name}' in '{room_id}'")
 
 
 def _admit_to_room(sid: str, name: str, room_id: str):
     """
-    Add a user to the live room and notify everyone.
-
-    BUG 3 FIX: Guard at top — if this sid is already registered in the room
-    dict, exit immediately. This makes admission idempotent so that any
-    edge-case double-call (e.g. network retry) cannot create a duplicate
-    peer entry, duplicate room_peers emission, or duplicate peer_joined
-    broadcast to existing participants.
+    Admit a user to the room.
+    FEATURE 1: Sends chat history to the newly admitted user.
+    FEATURE 3: Sends current mute states to the newly admitted user.
     """
-    # Duplicate-admission guard (Bug 3 fix)
     if sid in rooms.get(room_id, {}):
-        logger.warning(f"[ADMIT] Duplicate _admit_to_room call for sid={sid} in '{room_id}' — ignoring")
+        logger.warning(f"[ADMIT] Duplicate call for sid={sid} — ignoring")
         return
 
     join_room(room_id)
 
-    # Snapshot of existing peers BEFORE adding the new one
     existing = [
         {'peerId': peer_sid, 'name': peer_info['name']}
         for peer_sid, peer_info in rooms.get(room_id, {}).items()
     ]
 
-    # Write to the rooms dict (only place we ever write to it)
     rooms[room_id][sid] = {
         'name':      name,
         'joined_at': time.time(),
         'is_admin':  room_admins.get(room_id) == sid,
     }
 
-    # Tell the new user who is already here
     emit('room_peers', {
         'peers':   existing,
         'isAdmin': room_admins.get(room_id) == sid,
     }, to=sid)
 
-    # Tell existing peers a new user joined
-    emit('peer_joined', {
-        'peerId': sid,
-        'name':   name,
+    emit('peer_joined', {'peerId': sid, 'name': name}, to=room_id, skip_sid=sid)
+
+    # FEATURE 1: Send chat history to the newly admitted user
+    history = db.get_room_history(cfg, room_id, limit=cfg.CHAT_HISTORY_LIMIT)
+    if history:
+        emit('chat_history', {'messages': history}, to=sid)
+
+    # FEATURE 3: Send current host-mute states so the new user sees
+    # who is already muted
+    muted = db.get_muted_participants(cfg, room_id)
+    if muted:
+        emit('mute_state_snapshot', {'mutedNames': muted}, to=sid)
+
+    logger.info(f"[JOIN] '{name}' admitted to '{room_id}' | {len(rooms[room_id])} in room")
+
+
+# ── Chat ──────────────────────────────────────────────────────────────────────
+
+@socketio.on('chat_message')
+@require_auth
+def handle_chat(data, _session):
+    """
+    FEATURE 1: Save message to MySQL before broadcasting.
+    """
+    sid     = request.sid
+    room_id = _session['room']
+    name    = _session['sub']
+    message = str(data.get('message', '')).strip()[:500]
+    if not message:
+        return
+
+    # FEATURE 1: Persist to MySQL
+    db.save_message(cfg, room_id, sender_name=name, message=message)
+
+    emit('chat_message', {
+        'message':  message,
+        'sender':   name,
+        'senderId': sid,
     }, to=room_id, skip_sid=sid)
 
-    logger.info(f"[JOIN] '{name}' (sid={sid}) admitted to '{room_id}' | {len(rooms[room_id])} in room")
 
-
-# ── Signaling events ──────────────────────────────────────────────────────────
-
-# BUG 2 FIX: The legacy 'join' handler that called handle_request_join
-# internally has been REMOVED. It created a double-admission path:
-# if a client reconnected and fired both 'join' AND 'request_join',
-# the same user would be admitted twice. All clients now use 'request_join'.
+# ── Existing signaling events ─────────────────────────────────────────────────
 
 @socketio.on('offer')
 @require_auth
 def handle_offer(data, _session):
-    sid     = request.sid
-    room_id = _session['room']
-    target  = data.get('target')
-    if not target or target not in rooms.get(room_id, {}):
+    sid    = request.sid
+    target = data.get('target')
+    if not target or target not in rooms.get(_session['room'], {}):
         return
     emit('offer', {'sdp': data['sdp'], 'caller': sid}, to=target)
 
@@ -396,10 +523,9 @@ def handle_offer(data, _session):
 @socketio.on('answer')
 @require_auth
 def handle_answer(data, _session):
-    sid     = request.sid
-    room_id = _session['room']
-    target  = data.get('target')
-    if not target or target not in rooms.get(room_id, {}):
+    sid    = request.sid
+    target = data.get('target')
+    if not target or target not in rooms.get(_session['room'], {}):
         return
     emit('answer', {'sdp': data['sdp'], 'answerer': sid}, to=target)
 
@@ -407,29 +533,10 @@ def handle_answer(data, _session):
 @socketio.on('ice_candidate')
 @require_auth
 def handle_ice_candidate(data, _session):
-    room_id = _session['room']
-    target  = data.get('target')
-    if not target or target not in rooms.get(room_id, {}):
+    target = data.get('target')
+    if not target or target not in rooms.get(_session['room'], {}):
         return
-    emit('ice_candidate', {
-        'candidate': data.get('candidate'),
-        'sender':    request.sid,
-    }, to=target)
-
-
-@socketio.on('chat_message')
-@require_auth
-def handle_chat(data, _session):
-    sid     = request.sid
-    room_id = _session['room']
-    message = str(data.get('message', '')).strip()[:500]
-    if not message:
-        return
-    emit('chat_message', {
-        'message':  message,
-        'sender':   _session['sub'],
-        'senderId': sid,
-    }, to=room_id, skip_sid=sid)
+    emit('ice_candidate', {'candidate': data.get('candidate'), 'sender': request.sid}, to=target)
 
 
 @socketio.on('raise_hand')
@@ -459,8 +566,8 @@ def handle_media_state(data, _session):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    logger.info(f"Starting MeetFree on port {cfg.PORT}")
-    logger.info(f"Redis:  {'enabled - ' + cfg.REDIS_URL if cfg.REDIS_URL else 'disabled (single-worker)'}")
-    logger.info(f"TURN:   {'configured' if cfg.TURN_URL else 'STUN only'}")
-    logger.info(f"Stripe: {'configured' if cfg.STRIPE_SECRET_KEY else 'NOT configured (payments disabled)'}")
+    logger.info(f"Starting MeetFree (feature-dev) on port {cfg.PORT}")
+    logger.info(f"MySQL:  {'enabled' if cfg.MYSQL_ENABLED else 'disabled'}")
+    logger.info(f"Redis:  {'enabled' if cfg.REDIS_URL else 'disabled'}")
+    logger.info(f"Stripe: {'configured' if cfg.STRIPE_SECRET_KEY else 'disabled'}")
     socketio.run(app, host='0.0.0.0', port=cfg.PORT, debug=cfg.DEBUG)

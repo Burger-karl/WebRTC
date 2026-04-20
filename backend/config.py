@@ -64,20 +64,25 @@ class Config:
         return servers
 
     # ── Stripe ────────────────────────────────────────────────
-    # Test keys start with sk_test_ / pk_test_
-    # Live keys start with sk_live_ / pk_live_
-    # Get yours at: https://dashboard.stripe.com/apikeys
     STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
     STRIPE_WEBHOOK_SECRET:  str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    STRIPE_PRICE_MONTHLY:   str = os.getenv("STRIPE_PRICE_MONTHLY", "")
+    STRIPE_PRICE_YEARLY:    str = os.getenv("STRIPE_PRICE_YEARLY", "")
+    APP_BASE_URL:           str = os.getenv("APP_BASE_URL", "http://localhost:5000")
 
-    # Stripe Price IDs — created in your Stripe Dashboard under Products
-    # These are the IDs of the recurring prices you create (e.g. price_xxx)
-    STRIPE_PRICE_MONTHLY: str = os.getenv("STRIPE_PRICE_MONTHLY", "")
-    STRIPE_PRICE_YEARLY:  str = os.getenv("STRIPE_PRICE_YEARLY", "")
+    # ── MySQL (feature-dev branch) ────────────────────────────
+    # Set MYSQL_ENABLED=false to run the app without a database.
+    # Chat history, room passwords, and mute persistence are disabled
+    # but signaling, video, and auth still work normally.
+    MYSQL_ENABLED:  bool = os.getenv("MYSQL_ENABLED", "true").lower() == "true"
+    MYSQL_HOST:     str  = os.getenv("MYSQL_HOST",     "localhost")
+    MYSQL_PORT:     int  = int(os.getenv("MYSQL_PORT", 3306))
+    MYSQL_USER:     str  = os.getenv("MYSQL_USER",     "meetfree")
+    MYSQL_PASSWORD: str  = os.getenv("MYSQL_PASSWORD", "")
+    MYSQL_DATABASE: str  = os.getenv("MYSQL_DATABASE", "meetfree")
 
-    # Your public domain — used to build Stripe redirect URLs
-    # e.g. https://yourdomain.com  (no trailing slash)
-    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "http://localhost:5000")
+    # How many chat messages to send to a user when they join a room
+    CHAT_HISTORY_LIMIT: int = int(os.getenv("CHAT_HISTORY_LIMIT", 50))
 
 
 cfg = Config()

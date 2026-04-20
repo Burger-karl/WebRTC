@@ -589,3 +589,53 @@ input:checked + .toggle-slider:before { transform: translateX(20px); }
 .faq-item { background: var(--surface2); border-radius: 8px; padding: 1rem 1.25rem; }
 .faq-item strong { display: block; margin-bottom: 0.4rem; font-size: 0.92rem; }
 .faq-item p { color: var(--text-muted); font-size: 0.85rem; line-height: 1.5; margin: 0; }
+
+/* ── Feature-dev additions ─────────────────────────────────────────────── */
+
+/* Room password fields on landing page */
+.password-row { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.password-label { font-size: 0.8rem; color: var(--text-muted); padding-left: 2px; }
+.password-row input {
+  width: 100%; padding: 12px 16px; border-radius: 10px;
+  border: 2px solid var(--accent2); background: var(--surface2);
+  color: var(--text); font-size: 0.95rem; outline: none;
+  transition: border-color 0.2s;
+}
+.password-row input:focus { border-color: #8b5cf6; }
+
+/* Chat history */
+.history-banner {
+  padding: 6px 12px; background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem; color: var(--text-muted); text-align: center;
+}
+.history-msg { opacity: 0.75; }
+.history-msg .chat-text { font-style: italic; }
+.chat-history-divider {
+  text-align: center; font-size: 0.7rem; color: var(--text-muted);
+  padding: 6px 0; letter-spacing: 1px;
+}
+
+/* Host controls on video tiles */
+.tile-host-controls {
+  position: absolute; bottom: 10px; left: 0; right: 0;
+  display: flex; justify-content: center; gap: 6px;
+  opacity: 0; transition: opacity 0.2s; pointer-events: none;
+}
+.video-tile:hover .tile-host-controls { opacity: 1; pointer-events: all; }
+
+.tile-host-btn {
+  padding: 4px 10px; border-radius: 6px; border: none;
+  font-size: 0.72rem; font-weight: 700; cursor: pointer; transition: opacity 0.15s;
+}
+.mute-host-btn { background: rgba(83,52,131,0.85); color: #fff; }
+.mute-host-btn:hover { opacity: 0.85; }
+.kick-host-btn { background: rgba(233,69,96,0.85); color: #fff; }
+.kick-host-btn:hover { opacity: 0.85; }
+
+/* Host-muted mic button state */
+.ctrl-btn.host-muted {
+  background: rgba(233,69,96,0.35);
+  border-color: var(--accent);
+  cursor: not-allowed;
+}
