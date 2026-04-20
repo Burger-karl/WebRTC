@@ -5,6 +5,14 @@ Inspired by Whereby. No third-party APIs. No time limits. Fully self-hosted.
 
 ---
 
+## Branches
+
+| Branch | Description | Docs |
+|---|---|---|
+| `main` | Production-ready build | This file |
+| `feature-dev` | Persistent chat, room passwords, host controls | [FEATURE_DEV.md](./FEATURE_DEV.md) |
+
+
 ## Table of Contents
 
 1. [Project Overview](#1-project-overview)
