@@ -477,3 +477,221 @@ def get_muted_participants(cfg, room_id: str) -> list:
     finally:
         if conn:
             _return_conn(conn)
+
+
+# ── Order Booking & Meeting Scheduling ────────────────────────────────────────
+
+def create_order(cfg, client_name: str, client_email: str, service_type: str,
+                 requirements: str, budget: str, stripe_session_id: str) -> Optional[int]:
+    """
+    Create a new order record with payment_status='pending'.
+    Called immediately after Stripe Checkout Session is created
+    so we have a record before the user even pays.
+
+    Returns the new order ID, or None on failure.
+    """
+    if not _db_available:
+        return None
+
+    conn = None
+    try:
+        conn = _get_conn(cfg)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO orders
+                    (client_name, client_email, service_type, requirements,
+                     budget, stripe_session_id, payment_status)
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending')
+            """, (
+                client_name[:100],
+                client_email[:120].lower(),
+                service_type[:100],
+                requirements[:5000],
+                budget[:50] if budget else None,
+                stripe_session_id[:200],
+            ))
+        conn.commit()
+        order_id = conn.insert_id()
+        logger.info(f"[BOOKING] Order {order_id} created for {client_email} | service={service_type}")
+        return order_id
+    except Exception as e:
+        logger.error(f"[BOOKING] create_order error: {e}")
+        if conn:
+            try: conn.rollback()
+            except: pass
+        return None
+    finally:
+        if conn:
+            _return_conn(conn)
+
+
+def confirm_order_payment(cfg, stripe_session_id: str,
+                          stripe_transaction_id: str,
+                          room_id: str,
+                          meeting_link: str,
+                          scheduled_time) -> bool:
+    """
+    Called by the Stripe webhook when checkout.session.completed fires.
+
+    Updates the order record with:
+      - payment_status = 'paid'
+      - stripe_transaction_id (the payment_intent ID from Stripe)
+      - room_id (auto-generated unique meeting room)
+      - meeting_link (full URL to join the meeting)
+      - scheduled_time (auto-calculated: now + MEETING_SCHEDULE_HOURS_AFTER)
+
+    Returns True on success, False on failure.
+    """
+    if not _db_available:
+        return False
+
+    conn = None
+    try:
+        conn = _get_conn(cfg)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE orders
+                SET payment_status        = 'paid',
+                    stripe_transaction_id = %s,
+                    room_id               = %s,
+                    meeting_link          = %s,
+                    scheduled_time        = %s
+                WHERE stripe_session_id = %s
+                  AND payment_status    = 'pending'
+            """, (
+                stripe_transaction_id[:200],
+                room_id[:80],
+                meeting_link[:300],
+                scheduled_time,
+                stripe_session_id[:200],
+            ))
+            rows_updated = cur.rowcount
+        conn.commit()
+
+        if rows_updated == 0:
+            logger.warning(f"[BOOKING] confirm_order_payment: no pending order found for session {stripe_session_id}")
+            return False
+
+        logger.info(f"[BOOKING] Order confirmed | session={stripe_session_id} | room={room_id} | scheduled={scheduled_time}")
+        return True
+    except Exception as e:
+        logger.error(f"[BOOKING] confirm_order_payment error: {e}")
+        if conn:
+            try: conn.rollback()
+            except: pass
+        return False
+    finally:
+        if conn:
+            _return_conn(conn)
+
+
+def get_orders_by_email(cfg, client_email: str) -> list:
+    """
+    Fetch all orders for a client by their email address.
+    Used by the Client Dashboard to show active orders + Join Meeting button.
+
+    Returns list of order dicts ordered by newest first.
+    """
+    if not _db_available:
+        return []
+
+    conn = None
+    try:
+        conn = _get_conn(cfg)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    id, client_name, service_type, requirements, budget,
+                    payment_status, room_id, meeting_link,
+                    DATE_FORMAT(scheduled_time, '%W %d %M %Y at %H:%i') AS scheduled_time_fmt,
+                    DATE_FORMAT(created_at, '%d %M %Y') AS created_at_fmt
+                FROM orders
+                WHERE client_email = %s
+                ORDER BY created_at DESC
+            """, (client_email.lower().strip(),))
+            return cur.fetchall()
+    except Exception as e:
+        logger.error(f"[BOOKING] get_orders_by_email error: {e}")
+        return []
+    finally:
+        if conn:
+            _return_conn(conn)
+
+
+def get_order_by_session(cfg, stripe_session_id: str) -> Optional[dict]:
+    """Fetch a single order by its Stripe session ID."""
+    if not _db_available:
+        return None
+
+    conn = None
+    try:
+        conn = _get_conn(cfg)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM orders WHERE stripe_session_id = %s",
+                (stripe_session_id,)
+            )
+            return cur.fetchone()
+    except Exception as e:
+        logger.error(f"[BOOKING] get_order_by_session error: {e}")
+        return None
+    finally:
+        if conn:
+            _return_conn(conn)
+
+
+def get_order_by_id(cfg, order_id: int) -> Optional[dict]:
+    """Fetch a single order by its primary key."""
+    if not _db_available:
+        return None
+
+    conn = None
+    try:
+        conn = _get_conn(cfg)
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
+            return cur.fetchone()
+    except Exception as e:
+        logger.error(f"[BOOKING] get_order_by_id error: {e}")
+        return None
+    finally:
+        if conn:
+            _return_conn(conn)
+
+
+def get_all_orders(cfg, status_filter: str = None) -> list:
+    """
+    Admin: fetch all orders, optionally filtered by payment_status.
+    Used by an admin view to see all bookings.
+    """
+    if not _db_available:
+        return []
+
+    conn = None
+    try:
+        conn = _get_conn(cfg)
+        with conn.cursor() as cur:
+            if status_filter:
+                cur.execute("""
+                    SELECT id, client_name, client_email, service_type,
+                           payment_status, room_id, meeting_link, scheduled_time,
+                           created_at
+                    FROM orders
+                    WHERE payment_status = %s
+                    ORDER BY created_at DESC
+                """, (status_filter,))
+            else:
+                cur.execute("""
+                    SELECT id, client_name, client_email, service_type,
+                           payment_status, room_id, meeting_link, scheduled_time,
+                           created_at
+                    FROM orders
+                    ORDER BY created_at DESC
+                """)
+            return cur.fetchall()
+    except Exception as e:
+        logger.error(f"[BOOKING] get_all_orders error: {e}")
+        return []
+    finally:
+        if conn:
+            _return_conn(conn)

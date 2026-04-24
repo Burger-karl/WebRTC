@@ -84,5 +84,16 @@ class Config:
     # How many chat messages to send to a user when they join a room
     CHAT_HISTORY_LIMIT: int = int(os.getenv("CHAT_HISTORY_LIMIT", 50))
 
+    # ── Order Booking & Meeting Scheduling ────────────────────────
+    # Stripe Price ID for a one-time service order.
+    # Create a one-time price in your Stripe Dashboard under Products.
+    STRIPE_SERVICE_PRICE_ID: str = os.getenv("STRIPE_SERVICE_PRICE_ID", "")
+
+    # Default meeting duration shown to clients (informational only)
+    MEETING_DURATION_MINUTES: int = int(os.getenv("MEETING_DURATION_MINUTES", 60))
+
+    # Hours after payment to auto-schedule the first meeting slot
+    MEETING_SCHEDULE_HOURS_AFTER: int = int(os.getenv("MEETING_SCHEDULE_HOURS_AFTER", 24))
+
 
 cfg = Config()

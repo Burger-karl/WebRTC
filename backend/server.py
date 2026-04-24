@@ -38,6 +38,7 @@ from auth import (
     require_auth,
 )
 from payments import payments_bp, is_subscribed
+from bookings import bookings_bp
 import database as db
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -55,6 +56,7 @@ app = Flask(
 )
 app.config['SECRET_KEY'] = cfg.SECRET_KEY
 app.register_blueprint(payments_bp)
+app.register_blueprint(bookings_bp)
 
 # ── Socket.IO ─────────────────────────────────────────────────────────────────
 socketio = SocketIO(
@@ -566,7 +568,7 @@ def handle_media_state(data, _session):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    logger.info(f"Starting MeetFree (feature-dev) on port {cfg.PORT}")
+    logger.info(f"Starting MeetFree (booking-feature) on port {cfg.PORT}")
     logger.info(f"MySQL:  {'enabled' if cfg.MYSQL_ENABLED else 'disabled'}")
     logger.info(f"Redis:  {'enabled' if cfg.REDIS_URL else 'disabled'}")
     logger.info(f"Stripe: {'configured' if cfg.STRIPE_SECRET_KEY else 'disabled'}")
