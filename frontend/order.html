@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — Place an Order</title>
+  <link rel="stylesheet" href="/style.css"/>
+</head>
+<body class="landing-page">
+
+  <!--
+    FIX: All Jinja2 tags ({% %} and {{ }}) are kept ONLY in the HTML section.
+    They must NEVER appear inside <script> blocks — the browser JS engine
+    does not understand Jinja2 and throws "Unexpected token '%'".
+
+    Dynamic values are passed to JavaScript via data-* HTML attributes.
+    Flask renders those attributes before the page is sent to the browser,
+    so JavaScript only ever sees plain strings — no Jinja2 syntax.
+  -->
+  <div class="landing-container order-container"
+       id="pageRoot"
+       data-meeting-duration="{{ meeting_duration }}">
+
+    <div class="order-header">
+      <a href="/" class="back-link">← Back to Home</a>
+      <div class="logo" style="justify-content:center">
+        <span class="logo-icon">📹</span>
+        <span class="logo-text">MeetFree</span>
+      </div>
+    </div>
+
+    <h1 class="order-title">Book a Service</h1>
+    <p class="subtitle">
+      Tell us what you need. After payment, a dedicated meeting room is
+      automatically created so we can discuss your project.
+    </p>
+
+    <div class="order-progress">
+      <div class="progress-step active" id="step1-indicator">
+        <span class="step-num">1</span>
+        <span class="step-label">Your Details</span>
+      </div>
+      <div class="progress-divider"></div>
+      <div class="progress-step" id="step2-indicator">
+        <span class="step-num">2</span>
+        <span class="step-label">Requirements</span>
+      </div>
+      <div class="progress-divider"></div>
+      <div class="progress-step" id="step3-indicator">
+        <span class="step-num">3</span>
+        <span class="step-label">Payment</span>
+      </div>
+    </div>
+
+    <div id="errorBanner" class="error-banner hidden"></div>
+
+    <!-- Step 1 -->
+    <div id="step1" class="order-step">
+      <h2 class="step-title">Your Details</h2>
+
+      <div class="form-group">
+        <label for="clientName">Full Name *</label>
+        <input type="text" id="clientName" placeholder="Alice Johnson"
+               maxlength="100" autocomplete="name"/>
+      </div>
+
+      <div class="form-group">
+        <label for="clientEmail">Email Address *</label>
+        <input type="email" id="clientEmail" placeholder="alice@example.com"
+               maxlength="120" autocomplete="email"/>
+        <span class="field-hint">Your order confirmation and meeting details will be sent here.</span>
+      </div>
+
+      <div class="form-group">
+        <label for="serviceType">Service Type *</label>
+        <!--
+          The Jinja2 for loop stays here in HTML — Flask renders it
+          into plain <option> tags before the browser ever sees the page.
+          Each option gets a data-label attribute so JavaScript can read
+          the label text without needing any Jinja2 in the script block.
+        -->
+        <select id="serviceType">
+          <option value="">— Select a service —</option>
+          {% for key, label in service_types.items() %}
+          <option value="{{ key }}" data-label="{{ label }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <button class="order-btn primary-btn" onclick="goToStep(2)">
+        Next: Describe Your Project →
+      </button>
+    </div>
+
+    <!-- Step 2 -->
+    <div id="step2" class="order-step hidden">
+      <h2 class="step-title">Project Requirements</h2>
+
+      <div class="form-group">
+        <label for="requirements">Describe what you want to build *</label>
+        <textarea id="requirements" rows="6"
+                  placeholder="Please describe your project in detail..."
+                  maxlength="5000"></textarea>
+        <span class="field-hint">
+          <span id="reqCount">0</span>/5000 characters — minimum 20 required
+        </span>
+      </div>
+
+      <div class="form-group">
+        <label for="budget">Budget Range (optional)</label>
+        <select id="budget">
+          <option value="">— Select a range —</option>
+          <option value="Under $1,000">Under $1,000</option>
+          <option value="$1,000 - $5,000">$1,000 – $5,000</option>
+          <option value="$5,000 - $10,000">$5,000 – $10,000</option>
+          <option value="$10,000 - $25,000">$10,000 – $25,000</option>
+          <option value="$25,000+">$25,000+</option>
+          <option value="Flexible">Flexible / Open to discuss</option>
+        </select>
+      </div>
+
+      <div class="order-summary" id="orderSummary">
+        <h3>Order Summary</h3>
+        <div class="summary-row">
+          <span>Service</span>
+          <span id="summaryService">—</span>
+        </div>
+        <div class="summary-row">
+          <span>Meeting duration</span>
+          <!--
+            meeting_duration is rendered here by Flask into a data-* attribute.
+            JavaScript reads it via dataset.meetingDuration — no {{ }} in JS.
+          -->
+          <span id="summaryDuration">—</span>
+        </div>
+        <div class="summary-row">
+          <span>Meeting scheduled</span>
+          <span>Within 24 hours of payment</span>
+        </div>
+        <div class="summary-row total-row">
+          <span>What happens next</span>
+          <span>Your unique meeting room is auto-created</span>
+        </div>
+      </div>
+
+      <div class="step-buttons">
+        <button class="order-btn secondary-btn" onclick="goToStep(1)">← Back</button>
+        <button id="submitBtn" class="order-btn primary-btn" onclick="submitOrder()">
+          <span id="submitBtnText">Proceed to Payment →</span>
+          <span id="submitSpinner" class="spinner hidden"></span>
+        </button>
+      </div>
+
+      <p class="secure-note">🔒 Secured by Stripe. We never store your card details.</p>
+    </div>
+
+  </div>
+
+  <script>
+    /*
+      NO Jinja2 expressions appear in this script block.
+      All dynamic values are read from data-* attributes that Flask
+      already rendered into the HTML above.
+
+      service_types  → read from data-label on each <option> element
+      meeting_duration → read from data-meeting-duration on #pageRoot
+    */
+
+    // Build SERVICE_LABELS by reading data-label from each rendered <option>
+    var SERVICE_LABELS = {};
+    document.querySelectorAll('#serviceType option[value]').forEach(function(opt) {
+      if (opt.value) {
+        SERVICE_LABELS[opt.value] = opt.dataset.label || opt.textContent.trim();
+      }
+    });
+
+    // Read meeting duration from data attribute Flask rendered in HTML
+    var MEETING_DURATION = document.getElementById('pageRoot').dataset.meetingDuration || '60';
+    document.getElementById('summaryDuration').textContent = MEETING_DURATION + ' minutes';
+
+    // Character counter
+    document.getElementById('requirements').addEventListener('input', function() {
+      document.getElementById('reqCount').textContent = this.value.length;
+    });
+
+    function goToStep(step) {
+      if (step === 2) {
+        var name    = document.getElementById('clientName').value.trim();
+        var email   = document.getElementById('clientEmail').value.trim();
+        var service = document.getElementById('serviceType').value;
+
+        if (name.length < 2)      { showError('Please enter your full name.');        return; }
+        if (!email.includes('@')) { showError('Please enter a valid email address.'); return; }
+        if (!service)             { showError('Please select a service type.');        return; }
+
+        document.getElementById('summaryService').textContent =
+          SERVICE_LABELS[service] || service;
+      }
+
+      document.getElementById('step1').classList.toggle('hidden', step !== 1);
+      document.getElementById('step2').classList.toggle('hidden', step !== 2);
+
+      ['step1-indicator', 'step2-indicator', 'step3-indicator'].forEach(function(id, idx) {
+        document.getElementById(id).classList.toggle('active', idx < step);
+      });
+
+      document.getElementById('errorBanner').classList.add('hidden');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function submitOrder() {
+      var requirements = document.getElementById('requirements').value.trim();
+      if (requirements.length < 20) {
+        showError('Please describe your requirements in at least 20 characters.');
+        return;
+      }
+
+      document.getElementById('step3-indicator').classList.add('active');
+      setLoading(true);
+
+      var payload = {
+        client_name:  document.getElementById('clientName').value.trim(),
+        client_email: document.getElementById('clientEmail').value.trim(),
+        service_type: document.getElementById('serviceType').value,
+        requirements: requirements,
+        budget:       document.getElementById('budget').value,
+      };
+
+      try {
+        var res  = await fetch('/api/create-order', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(payload),
+        });
+        var data = await res.json();
+
+        if (!res.ok) {
+          showError(data.error || 'Something went wrong. Please try again.');
+          setLoading(false);
+          document.getElementById('step3-indicator').classList.remove('active');
+          return;
+        }
+
+        window.location.href = data.url;
+
+      } catch (err) {
+        console.error(err);
+        showError('Network error. Is the server running?');
+        setLoading(false);
+        document.getElementById('step3-indicator').classList.remove('active');
+      }
+    }
+
+    function showError(msg) {
+      var b = document.getElementById('errorBanner');
+      b.textContent = msg;
+      b.classList.remove('hidden');
+      setTimeout(function() { b.classList.add('hidden'); }, 6000);
+    }
+
+    function setLoading(on) {
+      document.getElementById('submitBtnText').classList.toggle('hidden', on);
+      document.getElementById('submitSpinner').classList.toggle('hidden', !on);
+      document.getElementById('submitBtn').disabled = on;
+    }
+  </script>
+</body>
+</html>
