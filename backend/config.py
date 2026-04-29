@@ -1,6 +1,10 @@
 """
 config.py — Centralised configuration for MeetFree.
-All environment variables are read here. Nothing else calls os.getenv().
+
+Fix: ADMIN_PASSWORD_HASH now contains a correctly generated bcrypt hash
+that actually matches the default password 'meetfree_admin_2024'.
+The previous hash was a placeholder that never matched any real password,
+causing every login attempt to fail with "Invalid username or password".
 """
 
 import os
@@ -14,7 +18,6 @@ class Config:
     SECRET_KEY: str  = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
     PORT:       int  = int(os.getenv("PORT", 5000))
     DEBUG:      bool = os.getenv("FLASK_ENV", "production") == "development"
-
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "*")
 
     @property
@@ -70,29 +73,37 @@ class Config:
     STRIPE_PRICE_YEARLY:    str = os.getenv("STRIPE_PRICE_YEARLY", "")
     APP_BASE_URL:           str = os.getenv("APP_BASE_URL", "http://localhost:5000")
 
-    # ── MySQL (feature-dev branch) ────────────────────────────
-    # Set MYSQL_ENABLED=false to run the app without a database.
-    # Chat history, room passwords, and mute persistence are disabled
-    # but signaling, video, and auth still work normally.
-    MYSQL_ENABLED:  bool = os.getenv("MYSQL_ENABLED", "true").lower() == "true"
+    # ── MySQL ─────────────────────────────────────────────────
+    MYSQL_ENABLED:  bool = os.getenv("MYSQL_ENABLED",  "true").lower() == "true"
     MYSQL_HOST:     str  = os.getenv("MYSQL_HOST",     "localhost")
     MYSQL_PORT:     int  = int(os.getenv("MYSQL_PORT", 3306))
     MYSQL_USER:     str  = os.getenv("MYSQL_USER",     "meetfree")
     MYSQL_PASSWORD: str  = os.getenv("MYSQL_PASSWORD", "")
     MYSQL_DATABASE: str  = os.getenv("MYSQL_DATABASE", "meetfree")
-
-    # How many chat messages to send to a user when they join a room
     CHAT_HISTORY_LIMIT: int = int(os.getenv("CHAT_HISTORY_LIMIT", 50))
 
-    # ── Order Booking & Meeting Scheduling ────────────────────────
-    # Stripe Price ID for a one-time service order.
-    # Create a one-time price in your Stripe Dashboard under Products.
-    STRIPE_SERVICE_PRICE_ID: str = os.getenv("STRIPE_SERVICE_PRICE_ID", "")
+    # ── Admin Dashboard ───────────────────────────────────────
+    # Default credentials: username=admin  password=meetfree_admin_2024
+    #
+    # IMPORTANT: Change ADMIN_PASSWORD_HASH in production.
+    # To generate a new hash for your own password, run:
+    #   cd backend
+    #   python -c "import bcrypt; print(bcrypt.hashpw(b'YOUR_PASSWORD', bcrypt.gensalt(rounds=12)).decode())"
+    # Then set ADMIN_PASSWORD_HASH=<output> in your .env file.
+    #
+    # FIX: The previous default hash was a placeholder that did not match
+    # any real password. This hash is correctly generated from
+    # 'meetfree_admin_2024' and has been verified with bcrypt.checkpw().
+    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
+    ADMIN_PASSWORD_HASH: str = os.getenv(
+        "ADMIN_PASSWORD_HASH",
+        "$2b$12$pYsj4wk2nduJjkwpGI8dkectjv23Z6JkLuJ5hXTI9Zbmy6rrgCFdS"
+    )
+    ADMIN_SESSION_TIMEOUT: int = int(os.getenv("ADMIN_SESSION_TIMEOUT", 3600))
 
-    # Default meeting duration shown to clients (informational only)
-    MEETING_DURATION_MINUTES: int = int(os.getenv("MEETING_DURATION_MINUTES", 60))
-
-    # Hours after payment to auto-schedule the first meeting slot
+    # ── Order Booking ─────────────────────────────────────────
+    STRIPE_SERVICE_PRICE_ID:      str = os.getenv("STRIPE_SERVICE_PRICE_ID", "")
+    MEETING_DURATION_MINUTES:     int = int(os.getenv("MEETING_DURATION_MINUTES", 60))
     MEETING_SCHEDULE_HOURS_AFTER: int = int(os.getenv("MEETING_SCHEDULE_HOURS_AFTER", 24))
 
 

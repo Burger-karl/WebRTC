@@ -1,33 +1,42 @@
-version: '3.9'
 
-# MeetFree — LOCAL TESTING (feature-dev branch)
-# Adds MySQL service for chat history, room passwords, host mute persistence.
-# Usage: docker-compose -f docker-compose.local.yml up --build
-# App:   http://localhost
+
+# MeetFree — LOCAL TESTING (hotfix branch)
+#
+# Fixes in this version:
+#   - MySQL health check updated to be more reliable on Windows/Docker Desktop
+#   - MYSQL_ROOT_PASSWORD explicitly set (prevents empty password warning)
+#   - start_period increased to 60s to give MySQL enough time on first init
+#   - Volume name matches what docker volume rm expects
 
 services:
 
   mysql:
     image: mysql:8.0
+    container_name: meetfree-mysql-1
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root_password_local
+      MYSQL_ROOT_PASSWORD: root_local_password_123
       MYSQL_DATABASE:      meetfree
       MYSQL_USER:          meetfree
       MYSQL_PASSWORD:      meetfree_local_password
     ports:
-      - "3306:3306"   # expose for inspection with MySQL Workbench or DBeaver
+      - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "meetfree", "-pmeetfree_local_password"]
+      # FIX: Use root credentials for the health check ping.
+      # The meetfree user is created AFTER root initialises, so using
+      # root for the ping avoids a race condition where the user
+      # doesn't exist yet when the first health check fires.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-proot_local_password_123"]
       interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s   # MySQL takes a moment to initialise on first run
+      timeout: 10s
+      retries: 15
+      start_period: 60s
 
   redis:
     image: redis:7-alpine
+    container_name: meetfree-redis-1
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -42,18 +51,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: meetfree-1
     restart: unless-stopped
     env_file: backend/.env.local
     environment:
-      REDIS_URL:       redis://redis:6379/0
-      MYSQL_HOST:      mysql
-      MYSQL_PORT:      3306
-      MYSQL_USER:      meetfree
-      MYSQL_PASSWORD:  meetfree_local_password
-      MYSQL_DATABASE:  meetfree
-      MYSQL_ENABLED:   "true"
-      FLASK_ENV:       development
-      PYTHONPATH:      /app/backend
+      # These override .env.local for Docker context
+      REDIS_URL:      redis://redis:6379/0
+      MYSQL_HOST:     mysql
+      MYSQL_PORT:     "3306"
+      MYSQL_USER:     meetfree
+      MYSQL_PASSWORD: meetfree_local_password
+      MYSQL_DATABASE: meetfree
+      MYSQL_ENABLED:  "true"
+      FLASK_ENV:      development
+      PYTHONPATH:     /app/backend
     depends_on:
       redis:
         condition: service_healthy
@@ -80,6 +91,7 @@ services:
 
   nginx:
     image: nginx:alpine
+    container_name: webrtc-nginx-1
     restart: unless-stopped
     ports:
       - "80:80"
@@ -90,4 +102,3 @@ services:
 
 volumes:
   mysql_data:
-  redis_data:

@@ -693,3 +693,11 @@ git push origin main
 ```
 
 The `--no-ff` flag preserves the branch history in the Git log.
+
+
+## Create a new Admin
+- cd backend
+- python -c "import bcrypt; print(bcrypt.hashpw(b'YOUR_NEW_PASSWORD', bcrypt.gensalt(rounds=12)).decode())"
+- Copy the output and add it to your .env file
+- ADMIN_USERNAME=admin
+  ADMIN_PASSWORD_HASH=<paste the output here>
