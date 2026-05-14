@@ -103,7 +103,7 @@ class Config:
     CHAT_HISTORY_LIMIT: int = int(os.getenv("CHAT_HISTORY_LIMIT", 50))
 
     # ── Order Booking ─────────────────────────────────────────
-    STRIPE_SERVICE_PRICE_ID:       str = os.getenv("STRIPE_SERVICE_PRICE_ID", "price_1TT1WrCVB66TJGM4v2lIxB7q")
+    STRIPE_SERVICE_PRICE_ID:       str = os.getenv("STRIPE_SERVICE_PRICE_ID", "")
     MEETING_DURATION_MINUTES:      int = int(os.getenv("MEETING_DURATION_MINUTES", 60))
     MEETING_SCHEDULE_HOURS_AFTER:  int = int(os.getenv("MEETING_SCHEDULE_HOURS_AFTER", 24))
 
