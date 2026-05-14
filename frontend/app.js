@@ -27,7 +27,7 @@ const _savedName = sessionStorage.getItem('meetfree_name');
 const _password  = sessionStorage.getItem('meetfree_password') || '';
 
 if (!_token) {
-  window.location.href = '/?room=' + encodeURIComponent(ROOM_ID);
+  window.location.href = '/join?room=' + encodeURIComponent(ROOM_ID);
 }
 
 const ICE_CONFIG = {
@@ -59,7 +59,7 @@ const socket = io({ query: { token: _token }, reconnectionAttempts: 5 });
 socket.on('connect_error', (err) => {
   if (err.message.includes('auth') || err.message.includes('401')) {
     sessionStorage.clear();
-    window.location.href = '/?room=' + encodeURIComponent(ROOM_ID) + '&error=session_expired';
+    window.location.href = '/join?room=' + encodeURIComponent(ROOM_ID) + '&error=session_expired';
   }
 });
 
@@ -492,13 +492,18 @@ socket.on('ice_candidate', async ({ candidate, sender }) => {
 
 socket.on('peer_left', ({ peerId }) => handlePeerDisconnect(peerId));
 
-socket.on('chat_message', ({ message, sender }) => {
+socket.on('chat_message', ({ message, sender, senderId }) => {
+  // Server now broadcasts to ALL including sender.
+  // Skip self-echo here — sendChat() already added it locally.
+  if (senderId === socket.id) return;
+
   appendChatMessage(sender, message, false);
   const panel = document.getElementById('chatPanel');
   if (panel.classList.contains('hidden')) {
-    panel.classList.remove('hidden');
-    unreadChats = 0;
-    document.getElementById('chatBadge').classList.add('hidden');
+    unreadChats++;
+    const badge = document.getElementById('chatBadge');
+    badge.textContent = unreadChats;
+    badge.classList.remove('hidden');
   }
   showToast(sender + ': ' + (message.length > 45 ? message.slice(0,45) + '...' : message), 4000);
 });
@@ -595,7 +600,7 @@ function leaveCall() {
   sessionStorage.removeItem('meetfree_ice');
   sessionStorage.removeItem('meetfree_password');
   socket.disconnect();
-  window.location.href = '/';
+  window.location.href = '/join';
 }
 
 function updateControlBarState() {

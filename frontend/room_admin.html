@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — Room Admin</title>
+  <link rel="stylesheet" href="/frontend/style.css"/>
+  <style>
+    :root {
+      --admin-bg:      #0f1117;
+      --admin-card:    #1a1d27;
+      --admin-border:  #2a2d3e;
+      --admin-accent:  #10b981;
+      --admin-danger:  #ff4d4f;
+      --admin-success: #52c41a;
+      --admin-warning: #faad14;
+      --admin-text:    #e8eaf6;
+      --admin-muted:   #6b7280;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--admin-bg); color: var(--admin-text); font-family: 'Inter', system-ui, sans-serif; min-height: 100vh; }
+
+    #loginScreen { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; }
+    .login-card { background: var(--admin-card); border: 1px solid var(--admin-border); border-radius: 16px; padding: 2.5rem; width: 100%; max-width: 420px; }
+    .login-logo { text-align: center; margin-bottom: 2rem; }
+    .login-logo .badge { display: inline-block; background: var(--admin-accent); color: #fff; font-size: .75rem; font-weight: 700; padding: .25rem .75rem; border-radius: 999px; margin-bottom: .75rem; }
+    .login-logo h1 { font-size: 1.5rem; font-weight: 700; }
+    .login-logo p  { font-size: .875rem; color: var(--admin-muted); margin-top: .25rem; }
+    .form-field { margin-bottom: 1.25rem; }
+    .form-field label { display: block; font-size: .8rem; font-weight: 600; margin-bottom: .4rem; color: var(--admin-muted); text-transform: uppercase; letter-spacing: .04em; }
+    .form-field input { width: 100%; padding: .75rem 1rem; border-radius: 8px; border: 1px solid var(--admin-border); background: var(--admin-bg); color: var(--admin-text); font-size: .95rem; outline: none; transition: border .2s; }
+    .form-field input:focus { border-color: var(--admin-accent); }
+    .btn { display: inline-flex; align-items: center; gap: .5rem; padding: .75rem 1.5rem; border-radius: 8px; border: none; font-size: .9rem; font-weight: 600; cursor: pointer; transition: opacity .2s; }
+    .btn:hover { opacity: .88; }
+    .btn-primary { background: var(--admin-accent); color: #fff; width: 100%; justify-content: center; }
+    .btn-ghost   { background: transparent; border: 1px solid var(--admin-border); color: var(--admin-text); }
+    .btn-sm      { padding: .4rem .9rem; font-size: .8rem; }
+    .error-msg   { color: var(--admin-danger); font-size: .85rem; margin-top: .75rem; text-align: center; min-height: 1.2rem; }
+
+    #dashboard { display: none; }
+    .top-bar { display: flex; align-items: center; justify-content: space-between; padding: 1rem 2rem; background: var(--admin-card); border-bottom: 1px solid var(--admin-border); position: sticky; top: 0; z-index: 10; }
+    .top-badge { background: var(--admin-accent); color: #fff; font-size: .7rem; font-weight: 700; padding: .2rem .6rem; border-radius: 999px; }
+    .top-bar h1 { font-size: 1.1rem; font-weight: 700; margin-left: .75rem; }
+    .admin-email { font-size: .8rem; color: var(--admin-muted); }
+
+    .main-content { padding: 2rem; max-width: 900px; margin: 0 auto; }
+
+    .room-header-card {
+      background: var(--admin-card); border: 1px solid var(--admin-border);
+      border-radius: 16px; padding: 2rem; margin-bottom: 2rem;
+    }
+    .room-header-card h2 { font-size: 1.4rem; font-weight: 700; margin-bottom: .5rem; }
+    .room-id-code { font-family: monospace; background: rgba(16,185,129,.12); color: var(--admin-accent); padding: .25rem .75rem; border-radius: 6px; font-size: 1rem; }
+
+    .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
+    .info-item { }
+    .info-label { font-size: .75rem; color: var(--admin-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .3rem; }
+    .info-value { font-size: 1.1rem; font-weight: 600; }
+    .expiry-ok      { color: var(--admin-success); }
+    .expiry-warning { color: var(--admin-warning); }
+    .expiry-expired { color: var(--admin-danger); }
+
+    .section { margin-bottom: 2rem; }
+    .section h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; }
+
+    .user-card {
+      background: var(--admin-card); border: 1px solid var(--admin-border);
+      border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: .5rem;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .user-name { font-weight: 600; }
+    .user-role { font-size: .78rem; color: var(--admin-muted); }
+    .host-badge { background: rgba(16,185,129,.15); color: var(--admin-accent); font-size: .72rem; font-weight: 700; padding: .15rem .5rem; border-radius: 999px; margin-left: .5rem; }
+
+    .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+    .no-data { text-align: center; color: var(--admin-muted); padding: 2rem; }
+    .refresh-hint { font-size: .75rem; color: var(--admin-muted); }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════ LOGIN ═══════════════ -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="badge">ROOM ADMIN</div>
+      <h1>📹 MeetFree</h1>
+      <p>Room-level administration panel</p>
+    </div>
+    <div class="form-field">
+      <label>Email</label>
+      <input type="email" id="loginEmail" placeholder="roomadmin@example.com"
+             onkeydown="if(event.key==='Enter') doLogin()"/>
+    </div>
+    <div class="form-field">
+      <label>Password</label>
+      <input type="password" id="loginPassword" placeholder="••••••••"
+             onkeydown="if(event.key==='Enter') doLogin()"/>
+    </div>
+    <button class="btn btn-primary" onclick="doLogin()" id="loginBtn">
+      <span id="loginBtnText">Sign In</span>
+      <span id="loginSpinner" class="spinner hidden"></span>
+    </button>
+    <div class="error-msg" id="loginError"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ DASHBOARD ═══════════════ -->
+<div id="dashboard">
+
+  <div class="top-bar">
+    <div style="display:flex;align-items:center;">
+      <span class="top-badge">ROOM ADMIN</span>
+      <h1>📹 MeetFree</h1>
+    </div>
+    <div style="display:flex;align-items:center;gap:1rem;">
+      <span class="admin-email" id="adminEmail"></span>
+      <button class="btn btn-ghost btn-sm" onclick="refreshData()">↻ Refresh</button>
+      <button class="btn btn-ghost btn-sm" onclick="doLogout()">Sign Out</button>
+    </div>
+  </div>
+
+  <div class="main-content">
+
+    <!-- Room Info Card -->
+    <div class="room-header-card">
+      <h2>Your Room</h2>
+      <div style="margin-top:.5rem;">
+        <span class="room-id-code" id="roomIdDisplay">—</span>
+      </div>
+      <div class="info-grid">
+        <div class="info-item">
+          <div class="info-label">Users Online</div>
+          <div class="info-value" id="userCount">—</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Subscription Expires</div>
+          <div class="info-value" id="subExpiry">—</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Status</div>
+          <div class="info-value" id="subStatus">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Users in Room -->
+    <div class="section">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+        <h2>👥 Users in Your Room</h2>
+        <span class="refresh-hint" id="usersUpdated"></span>
+      </div>
+      <div id="usersList"><div class="no-data">No users online</div></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  let _token   = sessionStorage.getItem('ra_token') || '';
+  let _roomId  = sessionStorage.getItem('ra_room')  || '';
+  let _timer   = null;
+
+  async function doLogin() {
+    const email    = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    if (!email || !password) return setLoginError('Email and password required.');
+
+    setLoginLoading(true);
+    try {
+      const res  = await apiFetch('/api/admin/login', 'POST', { email, password }, false);
+      const data = await res.json();
+      if (!res.ok) { setLoginError(data.error || 'Login failed.'); return; }
+      if (data.role !== 'room_admin') { setLoginError('This panel is for Room Admins only.'); return; }
+
+      _token  = data.token;
+      _roomId = data.room;
+      sessionStorage.setItem('ra_token', _token);
+      sessionStorage.setItem('ra_room',  _roomId);
+      showDashboard(email);
+    } catch(e) {
+      setLoginError('Network error. Is the server running?');
+    } finally { setLoginLoading(false); }
+  }
+
+  function doLogout() {
+    sessionStorage.removeItem('ra_token');
+    sessionStorage.removeItem('ra_room');
+    _token = ''; _roomId = '';
+    clearInterval(_timer);
+    document.getElementById('dashboard').style.display    = 'none';
+    document.getElementById('loginScreen').style.display  = 'flex';
+  }
+
+  function setLoginError(msg) { document.getElementById('loginError').textContent = msg; }
+  function setLoginLoading(on) {
+    document.getElementById('loginBtnText').classList.toggle('hidden', on);
+    document.getElementById('loginSpinner').classList.toggle('hidden', !on);
+    document.getElementById('loginBtn').disabled = on;
+  }
+
+  async function showDashboard(email) {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('dashboard').style.display   = 'block';
+    document.getElementById('adminEmail').textContent    = email;
+    document.getElementById('roomIdDisplay').textContent = _roomId;
+    refreshData();
+    _timer = setInterval(refreshData, 15000);
+  }
+
+  async function refreshData() {
+    if (!_roomId) return;
+    try {
+      const res  = await apiFetch(`/api/admin/room/${encodeURIComponent(_roomId)}`);
+      const data = await res.json();
+      if (!res.ok) { console.error(data.error); return; }
+
+      document.getElementById('userCount').textContent = data.user_count ?? '—';
+      document.getElementById('usersUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+      // Subscription expiry
+      const expEl = document.getElementById('subExpiry');
+      const stEl  = document.getElementById('subStatus');
+      if (data.subscription_expires_at) {
+        const expDate = new Date(data.subscription_expires_at);
+        const now     = new Date();
+        const daysLeft = Math.ceil((expDate - now) / 86400000);
+        expEl.textContent = expDate.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+        if (daysLeft < 0) {
+          expEl.className = 'info-value expiry-expired';
+          stEl.textContent = '❌ Expired';
+          stEl.className   = 'info-value expiry-expired';
+        } else if (daysLeft <= 7) {
+          expEl.className = 'info-value expiry-warning';
+          stEl.textContent = `⚠️ Expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}`;
+          stEl.className   = 'info-value expiry-warning';
+        } else {
+          expEl.className = 'info-value expiry-ok';
+          stEl.textContent = '✅ Active';
+          stEl.className   = 'info-value expiry-ok';
+        }
+      } else {
+        expEl.textContent = 'No expiry set';
+        expEl.className   = 'info-value';
+        stEl.textContent  = '✅ Active';
+        stEl.className    = 'info-value expiry-ok';
+      }
+
+      // Users
+      const listEl = document.getElementById('usersList');
+      const users  = data.users || [];
+      if (!users.length) {
+        listEl.innerHTML = '<div class="no-data">No users currently in your room</div>';
+      } else {
+        listEl.innerHTML = users.map(u => `
+          <div class="user-card">
+            <div>
+              <span class="user-name">${esc(u.name)}</span>
+              ${u.is_host ? '<span class="host-badge">Host</span>' : ''}
+              <div class="user-role">Session ID: ${esc(u.sid)}</div>
+            </div>
+          </div>`).join('');
+      }
+    } catch(e) { console.error('Room data error', e); }
+  }
+
+  async function apiFetch(url, method = 'GET', body = null, withAuth = true) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (withAuth && _token) headers['Authorization'] = 'Bearer ' + _token;
+    const opts = { method, headers };
+    if (body) opts.body = JSON.stringify(body);
+    return fetch(url, opts);
+  }
+
+  function esc(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Auto-login if session token exists
+  (async function() {
+    if (_token && _roomId) {
+      try {
+        const res = await apiFetch('/api/admin/me');
+        if (res.ok) {
+          const d = await res.json();
+          if (d.role === 'room_admin') { showDashboard(d.email); return; }
+        }
+      } catch(e) {}
+      sessionStorage.removeItem('ra_token');
+      sessionStorage.removeItem('ra_room');
+      _token = ''; _roomId = '';
+    }
+  })();
+</script>
+</body>
+</html>

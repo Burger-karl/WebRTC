@@ -1,4 +1,3 @@
-
 import logging
 import time
 from datetime import datetime
@@ -240,11 +239,26 @@ def create_checkout():
         # Get or create a single Stripe Customer for this email
         customer_id = _get_or_create_stripe_customer(email)
 
+        # Validate price is RECURRING before using subscription mode.
+        # A one-time price in subscription mode causes Stripe 400 error.
+        try:
+            price_obj   = stripe.Price.retrieve(price_id)
+            is_recurring = price_obj.get("recurring") is not None
+        except stripe.error.StripeError as pe:
+            logger.error(f"[PAYMENT] Could not retrieve price {price_id}: {pe}")
+            return jsonify({"error": f"Invalid price ID. Check STRIPE_PRICE_MONTHLY / STRIPE_PRICE_YEARLY in .env"}), 503
+
+        if not is_recurring:
+            logger.error(f"[PAYMENT] Price {price_id} is one-time, not recurring. Subscription mode requires recurring price.")
+            return jsonify({"error": (
+                "Your Stripe price is a one-time price, not a recurring subscription. "
+                "In Stripe Dashboard go to Products → add a recurring price → "
+                "copy the new price_xxx into STRIPE_PRICE_MONTHLY or STRIPE_PRICE_YEARLY in .env and restart."
+            )}), 503
+
         checkout_session = stripe.checkout.Session.create(
             payment_method_types=["card"],
             mode="subscription",
-            # FIX: pass customer= not customer_email= so Stripe reuses the
-            # existing Customer object instead of creating a duplicate.
             customer=customer_id,
             line_items=[{"price": price_id, "quantity": 1}],
             metadata={"plan": plan, "email": email},

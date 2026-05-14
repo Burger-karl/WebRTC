@@ -50,20 +50,25 @@
     {% else %}
     <div class="order-confirm-box">
       <p style="color:var(--text-muted);font-size:0.9rem">
-        Your meeting details are being prepared. Check your
-        <a href="/dashboard" style="color:var(--accent2)">dashboard</a>
-        in a moment — your Join Meeting button will appear there once ready.
+        Your meeting details are being prepared. Your dashboard will show
+        your meeting link shortly.
       </p>
     </div>
     {% endif %}
 
     <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:1.5rem">
-      <a href="/dashboard" class="order-btn primary-btn"
+      <!--
+        FIX: Pass email as query param so the dashboard pre-fills the email
+        field and loads orders automatically — no manual typing required.
+      -->
+      <a href="/dashboard{% if client_email %}?email={{ client_email }}{% endif %}"
+         class="order-btn primary-btn"
          style="display:inline-block;text-decoration:none;padding:12px 24px">
         View My Dashboard →
       </a>
-      <a href="/order" style="display:inline-block;text-decoration:none;padding:12px 24px;
-         background:var(--surface2);color:var(--text);border-radius:10px;font-weight:600">
+      <a href="/order"
+         style="display:inline-block;text-decoration:none;padding:12px 24px;
+                background:var(--surface2);color:var(--text);border-radius:10px;font-weight:600">
         Place Another Order
       </a>
     </div>

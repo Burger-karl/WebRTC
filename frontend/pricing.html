@@ -5,6 +5,40 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>MeetFree — Pricing</title>
   <link rel="stylesheet" href="/frontend/style.css"/>
+  <style>
+    /* Ensure error banner is always visible when shown */
+    #pricingError {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: 8px;
+      background: rgba(233,69,96,0.2);
+      border: 1px solid var(--accent, #e94560);
+      color: #ff8fa3;
+      font-size: 0.9rem;
+      text-align: center;
+      margin: 1rem 0;
+    }
+    #pricingError.hidden { display: none !important; }
+
+    /* Config warning shown when Stripe is not set up */
+    .config-warning {
+      background: rgba(250,173,20,0.15);
+      border: 1px solid rgba(250,173,20,0.4);
+      color: #faad14;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      margin: 1rem 0;
+      text-align: left;
+    }
+    .config-warning strong { display: block; margin-bottom: 4px; }
+    .config-warning code {
+      background: rgba(0,0,0,0.3);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+    }
+  </style>
 </head>
 <body class="landing-page">
 
@@ -17,7 +51,16 @@
     <h1>Simple, honest pricing</h1>
     <p class="subtitle">Start free for 14 days. No credit card required.</p>
 
-    <div id="pricingError" class="error-banner hidden"></div>
+    <!-- Error banner -->
+    <div id="pricingError" class="hidden"></div>
+
+    <!-- Config warning (shown by JS if price IDs are missing) -->
+    <div id="configWarning" class="config-warning hidden">
+      <strong>⚠️ Stripe not fully configured</strong>
+      The monthly/yearly price IDs are not set in your <code>.env</code> file.<br>
+      Add <code>STRIPE_PRICE_MONTHLY=price_xxx</code> and
+      <code>STRIPE_PRICE_YEARLY=price_xxx</code> then restart the server.
+    </div>
 
     <!-- Billing toggle -->
     <div class="billing-toggle">
@@ -26,7 +69,9 @@
         <input type="checkbox" id="billingToggle" onchange="switchBilling()"/>
         <span class="toggle-slider"></span>
       </label>
-      <span id="lblYearly" class="toggle-label">Yearly <span class="save-badge">Save 31%</span></span>
+      <span id="lblYearly" class="toggle-label">
+        Yearly <span class="save-badge">Save 31%</span>
+      </span>
     </div>
 
     <!-- Pricing Cards -->
@@ -42,7 +87,7 @@
           <li>✅ Screen sharing</li>
           <li>✅ In-room chat</li>
           <li>✅ Lobby / waiting room</li>
-          <li>❌ No credit card required</li>
+          <li>✅ No credit card required</li>
         </ul>
         <a href="/" class="plan-btn secondary-btn">Start Free Trial →</a>
       </div>
@@ -80,7 +125,7 @@
         <p class="secure-note">🔒 Powered by Stripe. Cancel anytime.</p>
       </div>
 
-    </div><!-- /pricing-cards -->
+    </div>
 
     <!-- FAQ -->
     <div class="faq">
@@ -90,7 +135,7 @@
       </div>
       <div class="faq-item">
         <strong>What payment methods are accepted?</strong>
-        <p>All major credit and debit cards (Visa, Mastercard, Amex) via Stripe. No PayPal.</p>
+        <p>All major credit and debit cards (Visa, Mastercard, Amex) via Stripe.</p>
       </div>
       <div class="faq-item">
         <strong>Is my card information stored?</strong>
@@ -104,71 +149,99 @@
   </div>
 
   <script>
-    // Injected by Flask/Jinja2
-    const STRIPE_PUBLISHABLE_KEY = "{{ stripe_publishable_key }}";
-    const PRICE_MONTHLY          = "{{ price_monthly }}";
-    const PRICE_YEARLY           = "{{ price_yearly }}";
+    // Injected by Flask/Jinja2 — these come from your .env file
+    var STRIPE_PUBLISHABLE_KEY = "{{ stripe_publishable_key }}";
+    var PRICE_MONTHLY          = "{{ price_monthly }}";
+    var PRICE_YEARLY           = "{{ price_yearly }}";
 
-    let currentPlan = 'monthly';
+    var currentPlan = 'monthly';
+
+    // Show a warning if price IDs are not configured
+    (function checkConfig() {
+      var missingMonthly = !PRICE_MONTHLY || PRICE_MONTHLY === '' || PRICE_MONTHLY.indexOf('price_') !== 0;
+      var missingYearly  = !PRICE_YEARLY  || PRICE_YEARLY  === '' || PRICE_YEARLY.indexOf('price_')  !== 0;
+      if (missingMonthly || missingYearly) {
+        document.getElementById('configWarning').classList.remove('hidden');
+        // Disable the subscribe button if not configured
+        document.getElementById('checkoutBtn').disabled = true;
+        document.getElementById('checkoutBtn').title =
+          'Stripe price IDs not configured — add them to .env and restart';
+      }
+    })();
 
     function switchBilling() {
-      const yearly = document.getElementById('billingToggle').checked;
-      currentPlan  = yearly ? 'yearly' : 'monthly';
+      var yearly  = document.getElementById('billingToggle').checked;
+      currentPlan = yearly ? 'yearly' : 'monthly';
       document.getElementById('lblMonthly').classList.toggle('active', !yearly);
-      document.getElementById('lblYearly').classList.toggle('active', yearly);
+      document.getElementById('lblYearly').classList.toggle('active',   yearly);
       document.getElementById('proPrice').innerHTML = yearly
         ? '$99<span class="plan-period">/year</span>'
         : '$12<span class="plan-period">/month</span>';
     }
 
     async function startCheckout() {
-      const email = document.getElementById('checkoutEmail').value.trim();
-      if (!email || !email.includes('@')) {
+      var email = document.getElementById('checkoutEmail').value.trim();
+      if (!email || email.indexOf('@') === -1) {
         showError('Please enter a valid email address.');
         return;
       }
 
       setLoading(true);
+      hideError();
 
       try {
-        const res = await fetch('/api/create-checkout', {
+        var res = await fetch('/api/create-checkout', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ email, plan: currentPlan }),
+          body:    JSON.stringify({ email: email, plan: currentPlan }),
         });
 
-        const data = await res.json();
+        var data = await res.json();
 
         if (!res.ok) {
-          showError(data.error || 'Could not start checkout. Please try again.');
+          // Show the actual error message so the user knows what's wrong
+          var msg = data.error || 'Could not start checkout. Please try again.';
+
+          // Give a helpful hint for the most common misconfiguration
+          if (msg.indexOf('price_') !== -1 || msg.indexOf('No such price') !== -1) {
+            msg = 'Stripe price ID is invalid. Check STRIPE_PRICE_MONTHLY / STRIPE_PRICE_YEARLY in your .env file.';
+          } else if (msg.indexOf('not configured') !== -1) {
+            msg = 'Stripe is not configured. Add STRIPE_SECRET_KEY and price IDs to your .env file.';
+          }
+
+          showError(msg);
           setLoading(false);
           return;
         }
 
-        // Redirect to Stripe's hosted checkout page
+        // Redirect to Stripe hosted checkout
         window.location.href = data.url;
 
       } catch (err) {
-        console.error(err);
-        showError('Network error. Please try again.');
+        console.error('Checkout error:', err);
+        showError('Network error. Is the server running?');
         setLoading(false);
       }
     }
 
-    // Allow Enter key on email field
-    document.getElementById('checkoutEmail').addEventListener('keydown', e => {
+    document.getElementById('checkoutEmail').addEventListener('keydown', function(e) {
       if (e.key === 'Enter') startCheckout();
     });
 
     function showError(msg) {
-      const el = document.getElementById('pricingError');
+      var el = document.getElementById('pricingError');
       el.textContent = msg;
       el.classList.remove('hidden');
-      setTimeout(() => el.classList.add('hidden'), 5000);
+      // Auto-hide after 8 seconds
+      setTimeout(function() { el.classList.add('hidden'); }, 8000);
+    }
+
+    function hideError() {
+      document.getElementById('pricingError').classList.add('hidden');
     }
 
     function setLoading(on) {
-      document.getElementById('checkoutBtnText').classList.toggle('hidden', on);
+      document.getElementById('checkoutBtnText').classList.toggle('hidden',  on);
       document.getElementById('checkoutSpinner').classList.toggle('hidden', !on);
       document.getElementById('checkoutBtn').disabled = on;
     }

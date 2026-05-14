@@ -1,10 +1,16 @@
+
+
+
+
 """
 config.py — Centralised configuration for MeetFree.
+All environment variables are read here. Nothing else calls os.getenv().
 
-Fix: ADMIN_PASSWORD_HASH now contains a correctly generated bcrypt hash
-that actually matches the default password 'meetfree_admin_2024'.
-The previous hash was a placeholder that never matched any real password,
-causing every login attempt to fail with "Invalid username or password".
+NEW in RBAC branch:
+  ADMIN_SECRET_KEY          — signs admin JWTs (separate from user JWTs)
+  SUPER_ADMIN_EMAIL         — super admin login email
+  SUPER_ADMIN_PASSWORD_HASH — bcrypt hash of super admin password
+  ADMIN_JWT_EXPIRY_SECONDS  — admin token lifetime (default 3600 = 1 hour)
 """
 
 import os
@@ -18,6 +24,7 @@ class Config:
     SECRET_KEY: str  = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
     PORT:       int  = int(os.getenv("PORT", 5000))
     DEBUG:      bool = os.getenv("FLASK_ENV", "production") == "development"
+
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "*")
 
     @property
@@ -34,9 +41,21 @@ class Config:
     def socketio_message_queue(self):
         return self.REDIS_URL if self.REDIS_URL else None
 
-    # ── JWT ───────────────────────────────────────────────────
+    # ── JWT (user tokens) ─────────────────────────────────────
     JWT_SECRET:         str = os.getenv("JWT_SECRET", "dev-jwt-secret-change-in-production")
     JWT_EXPIRY_SECONDS: int = int(os.getenv("JWT_EXPIRY_SECONDS", 28800))
+
+    # ── Admin JWT (separate secret from user JWTs) ────────────
+    # IMPORTANT: Set ADMIN_SECRET_KEY to a long random string in production.
+    # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+    ADMIN_SECRET_KEY:         str = os.getenv("ADMIN_SECRET_KEY", "dev-admin-secret-change-in-production")
+    ADMIN_JWT_EXPIRY_SECONDS: int = int(os.getenv("ADMIN_JWT_EXPIRY_SECONDS", 3600))
+
+    # ── Super Admin credentials ───────────────────────────────
+    # Generate hash with:
+    #   python -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt(12)).decode())"
+    SUPER_ADMIN_EMAIL:         str = os.getenv("SUPER_ADMIN_EMAIL", "")
+    SUPER_ADMIN_PASSWORD_HASH: str = os.getenv("SUPER_ADMIN_PASSWORD_HASH", "")
 
     # ── Room limits ───────────────────────────────────────────
     MAX_USERS_PER_ROOM: int = int(os.getenv("MAX_USERS_PER_ROOM", 100))
@@ -67,44 +86,26 @@ class Config:
         return servers
 
     # ── Stripe ────────────────────────────────────────────────
-    STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_test_51TT1SRCVB66TJGM48IKxFFHGhmg4EfKLRFu8xIHUpSLSxMYP5TWF0jrJqPERZYabegCIJxZ2Z29t18CnyM4xPlQC00WxSexJHn")
     STRIPE_WEBHOOK_SECRET:  str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     STRIPE_PRICE_MONTHLY:   str = os.getenv("STRIPE_PRICE_MONTHLY", "")
     STRIPE_PRICE_YEARLY:    str = os.getenv("STRIPE_PRICE_YEARLY", "")
     APP_BASE_URL:           str = os.getenv("APP_BASE_URL", "http://localhost:5000")
 
     # ── MySQL ─────────────────────────────────────────────────
-    MYSQL_ENABLED:  bool = os.getenv("MYSQL_ENABLED",  "true").lower() == "true"
+    MYSQL_ENABLED:  bool = os.getenv("MYSQL_ENABLED", "true").lower() == "true"
     MYSQL_HOST:     str  = os.getenv("MYSQL_HOST",     "localhost")
     MYSQL_PORT:     int  = int(os.getenv("MYSQL_PORT", 3306))
     MYSQL_USER:     str  = os.getenv("MYSQL_USER",     "meetfree")
-    MYSQL_PASSWORD: str  = os.getenv("MYSQL_PASSWORD", "")
+    MYSQL_PASSWORD: str  = os.getenv("MYSQL_PASSWORD", "meetfree123")
     MYSQL_DATABASE: str  = os.getenv("MYSQL_DATABASE", "meetfree")
+
     CHAT_HISTORY_LIMIT: int = int(os.getenv("CHAT_HISTORY_LIMIT", 50))
 
-    # ── Admin Dashboard ───────────────────────────────────────
-    # Default credentials: username=admin  password=meetfree_admin_2024
-    #
-    # IMPORTANT: Change ADMIN_PASSWORD_HASH in production.
-    # To generate a new hash for your own password, run:
-    #   cd backend
-    #   python -c "import bcrypt; print(bcrypt.hashpw(b'YOUR_PASSWORD', bcrypt.gensalt(rounds=12)).decode())"
-    # Then set ADMIN_PASSWORD_HASH=<output> in your .env file.
-    #
-    # FIX: The previous default hash was a placeholder that did not match
-    # any real password. This hash is correctly generated from
-    # 'meetfree_admin_2024' and has been verified with bcrypt.checkpw().
-    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
-    ADMIN_PASSWORD_HASH: str = os.getenv(
-        "ADMIN_PASSWORD_HASH",
-        "$2b$12$pYsj4wk2nduJjkwpGI8dkectjv23Z6JkLuJ5hXTI9Zbmy6rrgCFdS"
-    )
-    ADMIN_SESSION_TIMEOUT: int = int(os.getenv("ADMIN_SESSION_TIMEOUT", 3600))
-
     # ── Order Booking ─────────────────────────────────────────
-    STRIPE_SERVICE_PRICE_ID:      str = os.getenv("STRIPE_SERVICE_PRICE_ID", "")
-    MEETING_DURATION_MINUTES:     int = int(os.getenv("MEETING_DURATION_MINUTES", 60))
-    MEETING_SCHEDULE_HOURS_AFTER: int = int(os.getenv("MEETING_SCHEDULE_HOURS_AFTER", 24))
+    STRIPE_SERVICE_PRICE_ID:       str = os.getenv("STRIPE_SERVICE_PRICE_ID", "price_1TT1WrCVB66TJGM4v2lIxB7q")
+    MEETING_DURATION_MINUTES:      int = int(os.getenv("MEETING_DURATION_MINUTES", 60))
+    MEETING_SCHEDULE_HOURS_AFTER:  int = int(os.getenv("MEETING_SCHEDULE_HOURS_AFTER", 24))
 
 
 cfg = Config()

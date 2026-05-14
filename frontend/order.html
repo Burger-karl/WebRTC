@@ -4,19 +4,10 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>MeetFree — Place an Order</title>
-  <link rel="stylesheet" href="/style.css"/>
+  <link rel="stylesheet" href="/frontend/style.css"/>
 </head>
 <body class="landing-page">
 
-  <!--
-    FIX: All Jinja2 tags ({% %} and {{ }}) are kept ONLY in the HTML section.
-    They must NEVER appear inside <script> blocks — the browser JS engine
-    does not understand Jinja2 and throws "Unexpected token '%'".
-
-    Dynamic values are passed to JavaScript via data-* HTML attributes.
-    Flask renders those attributes before the page is sent to the browser,
-    so JavaScript only ever sees plain strings — no Jinja2 syntax.
-  -->
   <div class="landing-container order-container"
        id="pageRoot"
        data-meeting-duration="{{ meeting_duration }}">
@@ -52,10 +43,12 @@
       </div>
     </div>
 
-    <div id="errorBanner" class="error-banner hidden"></div>
-
     <!-- Step 1 -->
     <div id="step1" class="order-step">
+
+      <!-- FIX: step1 error banner — only shown on step 1 -->
+      <div id="errorBannerStep1" class="error-banner hidden"></div>
+
       <h2 class="step-title">Your Details</h2>
 
       <div class="form-group">
@@ -73,12 +66,6 @@
 
       <div class="form-group">
         <label for="serviceType">Service Type *</label>
-        <!--
-          The Jinja2 for loop stays here in HTML — Flask renders it
-          into plain <option> tags before the browser ever sees the page.
-          Each option gets a data-label attribute so JavaScript can read
-          the label text without needing any Jinja2 in the script block.
-        -->
         <select id="serviceType">
           <option value="">— Select a service —</option>
           {% for key, label in service_types.items() %}
@@ -94,12 +81,19 @@
 
     <!-- Step 2 -->
     <div id="step2" class="order-step hidden">
+
+      <!-- FIX: step2 has its OWN error banner so errors always show
+           when the user is on step 2. Previously the single errorBanner
+           was in step1 which is hidden on step2 — so errors were invisible
+           and the button appeared to do nothing. -->
+      <div id="errorBannerStep2" class="error-banner hidden"></div>
+
       <h2 class="step-title">Project Requirements</h2>
 
       <div class="form-group">
         <label for="requirements">Describe what you want to build *</label>
         <textarea id="requirements" rows="6"
-                  placeholder="Please describe your project in detail..."
+                  placeholder="Please describe your project in detail. Include any specific features, integrations, technology preferences, deadlines, or anything else that would help us understand your needs..."
                   maxlength="5000"></textarea>
         <span class="field-hint">
           <span id="reqCount">0</span>/5000 characters — minimum 20 required
@@ -127,10 +121,6 @@
         </div>
         <div class="summary-row">
           <span>Meeting duration</span>
-          <!--
-            meeting_duration is rendered here by Flask into a data-* attribute.
-            JavaScript reads it via dataset.meetingDuration — no {{ }} in JS.
-          -->
           <span id="summaryDuration">—</span>
         </div>
         <div class="summary-row">
@@ -157,16 +147,7 @@
   </div>
 
   <script>
-    /*
-      NO Jinja2 expressions appear in this script block.
-      All dynamic values are read from data-* attributes that Flask
-      already rendered into the HTML above.
-
-      service_types  → read from data-label on each <option> element
-      meeting_duration → read from data-meeting-duration on #pageRoot
-    */
-
-    // Build SERVICE_LABELS by reading data-label from each rendered <option>
+    // Read service labels from rendered option data-label attributes
     var SERVICE_LABELS = {};
     document.querySelectorAll('#serviceType option[value]').forEach(function(opt) {
       if (opt.value) {
@@ -174,7 +155,7 @@
       }
     });
 
-    // Read meeting duration from data attribute Flask rendered in HTML
+    // Read meeting duration from data attribute rendered by Flask
     var MEETING_DURATION = document.getElementById('pageRoot').dataset.meetingDuration || '60';
     document.getElementById('summaryDuration').textContent = MEETING_DURATION + ' minutes';
 
@@ -183,18 +164,40 @@
       document.getElementById('reqCount').textContent = this.value.length;
     });
 
+    // FIX: Two separate showError functions — one per step
+    // This guarantees the error is always visible regardless of which step is active.
+    function showError(msg) {
+      // Show in step1 banner (used during step1 validation)
+      var b1 = document.getElementById('errorBannerStep1');
+      b1.textContent = msg;
+      b1.classList.remove('hidden');
+      setTimeout(function() { b1.classList.add('hidden'); }, 7000);
+    }
+
+    function showStep2Error(msg) {
+      // Show in step2 banner (used during payment submission)
+      console.error('[ORDER] Error:', msg);  // always log to console too
+      var b2 = document.getElementById('errorBannerStep2');
+      b2.textContent = msg;
+      b2.classList.remove('hidden');
+      // Do NOT auto-hide step2 errors — user needs to read them
+    }
+
+    function clearStep2Error() {
+      var b2 = document.getElementById('errorBannerStep2');
+      b2.classList.add('hidden');
+      b2.textContent = '';
+    }
+
     function goToStep(step) {
       if (step === 2) {
         var name    = document.getElementById('clientName').value.trim();
         var email   = document.getElementById('clientEmail').value.trim();
         var service = document.getElementById('serviceType').value;
-
         if (name.length < 2)      { showError('Please enter your full name.');        return; }
         if (!email.includes('@')) { showError('Please enter a valid email address.'); return; }
         if (!service)             { showError('Please select a service type.');        return; }
-
-        document.getElementById('summaryService').textContent =
-          SERVICE_LABELS[service] || service;
+        document.getElementById('summaryService').textContent = SERVICE_LABELS[service] || service;
       }
 
       document.getElementById('step1').classList.toggle('hidden', step !== 1);
@@ -204,14 +207,17 @@
         document.getElementById(id).classList.toggle('active', idx < step);
       });
 
-      document.getElementById('errorBanner').classList.add('hidden');
+      // Only clear step1 banner when navigating — never touch step2 banner here
+      document.getElementById('errorBannerStep1').classList.add('hidden');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     async function submitOrder() {
+      clearStep2Error();
+
       var requirements = document.getElementById('requirements').value.trim();
       if (requirements.length < 20) {
-        showError('Please describe your requirements in at least 20 characters.');
+        showStep2Error('Please describe your requirements in at least 20 characters.');
         return;
       }
 
@@ -226,36 +232,74 @@
         budget:       document.getElementById('budget').value,
       };
 
+      console.log('[ORDER] Submitting order:', payload.client_email, payload.service_type);
+
       try {
-        var res  = await fetch('/api/create-order', {
+        var res = await fetch('/api/create-order', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify(payload),
         });
-        var data = await res.json();
 
-        if (!res.ok) {
-          showError(data.error || 'Something went wrong. Please try again.');
+        // Always parse the response body first
+        var data;
+        try {
+          data = await res.json();
+        } catch (parseErr) {
+          console.error('[ORDER] Could not parse server response:', parseErr);
+          showStep2Error('Server error. Please check your terminal and try again.');
           setLoading(false);
           document.getElementById('step3-indicator').classList.remove('active');
           return;
         }
 
+        console.log('[ORDER] Server response:', res.status, data);
+
+        if (res.status === 503) {
+          // Stripe or DB not configured
+          showStep2Error(
+            (data.error || 'Server not configured.') +
+            ' — Please check that STRIPE_SECRET_KEY and STRIPE_SERVICE_PRICE_ID are set in your .env file.'
+          );
+          setLoading(false);
+          document.getElementById('step3-indicator').classList.remove('active');
+          return;
+        }
+
+        if (res.status === 400) {
+          // Validation error
+          showStep2Error(data.error || 'Please check your details and try again.');
+          setLoading(false);
+          document.getElementById('step3-indicator').classList.remove('active');
+          return;
+        }
+
+        if (!res.ok) {
+          // Any other server error
+          showStep2Error(data.error || 'Something went wrong (status ' + res.status + '). Please try again.');
+          setLoading(false);
+          document.getElementById('step3-indicator').classList.remove('active');
+          return;
+        }
+
+        if (!data.url) {
+          showStep2Error('No checkout URL received from server. Check server logs.');
+          setLoading(false);
+          document.getElementById('step3-indicator').classList.remove('active');
+          return;
+        }
+
+        // Success — redirect to Stripe Checkout
+        console.log('[ORDER] Redirecting to Stripe:', data.url);
         window.location.href = data.url;
 
       } catch (err) {
-        console.error(err);
-        showError('Network error. Is the server running?');
+        // Network error — server not running
+        console.error('[ORDER] Network error:', err);
+        showStep2Error('Cannot reach the server. Make sure python server.py is running.');
         setLoading(false);
         document.getElementById('step3-indicator').classList.remove('active');
       }
-    }
-
-    function showError(msg) {
-      var b = document.getElementById('errorBanner');
-      b.textContent = msg;
-      b.classList.remove('hidden');
-      setTimeout(function() { b.classList.add('hidden'); }, 6000);
     }
 
     function setLoading(on) {

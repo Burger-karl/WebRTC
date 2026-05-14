@@ -62,6 +62,8 @@
       if (p.get('email')) document.getElementById('emailInput').value = p.get('email');
       if (p.get('error') === 'session_expired') showError('Your session expired. Please sign in again.');
       document.getElementById('nameInput').focus();
+      // FIX: If room was pre-filled from URL, check its password status immediately
+      if (p.get('room')) setTimeout(checkRoomStatus, 300);
     })();
 
     ['nameInput','emailInput','roomInput','passwordInput','setPasswordInput'].forEach(id => {

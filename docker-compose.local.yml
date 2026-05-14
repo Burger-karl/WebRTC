@@ -1,104 +1,108 @@
-
-
-# MeetFree — LOCAL TESTING (hotfix branch)
+# MeetFree — LOCAL TESTING
+# ─────────────────────────────────────────────────────────────────────────────
+# Usage:
+#   docker compose -f docker-compose.local.yml up --build
 #
-# Fixes in this version:
-#   - MySQL health check updated to be more reliable on Windows/Docker Desktop
-#   - MYSQL_ROOT_PASSWORD explicitly set (prevents empty password warning)
-#   - start_period increased to 60s to give MySQL enough time on first init
-#   - Volume name matches what docker volume rm expects
+# Full reset (wipes DB volume):
+#   docker compose -f docker-compose.local.yml down -v
+#   docker compose -f docker-compose.local.yml up --build
+# ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
+  # ── MySQL ───────────────────────────────────────────────────────────────────
   mysql:
     image: mysql:8.0
-    container_name: meetfree-mysql-1
+    container_name: meetfree-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root_local_password_123
+      MYSQL_ROOT_PASSWORD: root_local_pass
       MYSQL_DATABASE:      meetfree
       MYSQL_USER:          meetfree
-      MYSQL_PASSWORD:      meetfree_local_password
+      MYSQL_PASSWORD:      meetfree_local_pass
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./docker/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      # FIX: Use root credentials for the health check ping.
-      # The meetfree user is created AFTER root initialises, so using
-      # root for the ping avoids a race condition where the user
-      # doesn't exist yet when the first health check fires.
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-proot_local_password_123"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-proot_local_pass", "--silent"]
       interval: 10s
-      timeout: 10s
-      retries: 15
-      start_period: 60s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
 
+  # ── Redis ───────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: meetfree-redis-1
+    container_name: meetfree-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "6380:6379"
     command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
+      start_period: 10s
 
+  # ── MeetFree App ─────────────────────────────────────────────────────────────
   meetfree:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: meetfree-1
+    container_name: meetfree-app
     restart: unless-stopped
     env_file: backend/.env.local
     environment:
-      # These override .env.local for Docker context
-      REDIS_URL:      redis://redis:6379/0
+      FLASK_ENV:      development
+      MYSQL_ENABLED:  "true"
       MYSQL_HOST:     mysql
       MYSQL_PORT:     "3306"
       MYSQL_USER:     meetfree
-      MYSQL_PASSWORD: meetfree_local_password
+      MYSQL_PASSWORD: meetfree_local_pass
       MYSQL_DATABASE: meetfree
-      MYSQL_ENABLED:  "true"
-      FLASK_ENV:      development
+      REDIS_URL:      redis://redis:6379/0
       PYTHONPATH:     /app/backend
     depends_on:
-      redis:
-        condition: service_healthy
       mysql:
         condition: service_healthy
-    command: >
-      gunicorn
-        --worker-class eventlet
-        --workers 1
-        --bind 0.0.0.0:5000
-        --timeout 120
-        --reload
-        --log-level debug
-        --access-logfile -
-        --error-logfile -
-        backend.server:app
+      redis:
+        condition: service_healthy
+    # FIX: gunicorn must be on ONE line after the wait script.
+    # Using > (folded block) was splitting each indented line into a
+    # separate shell command, so gunicorn got no arguments at all.
+    command: [
+      "sh", "-c",
+      "echo '[WAIT] Waiting for MySQL...' && until python /app/docker/wait-for-mysql.py; do echo '[WAIT] Retrying in 3s...' && sleep 3; done && echo '[OK] MySQL ready — starting gunicorn' && gunicorn --worker-class eventlet --workers 1 --bind 0.0.0.0:5000 --timeout 120 --reload --log-level debug --access-logfile - --error-logfile - backend.server:app"
+    ]
     volumes:
       - ./backend:/app/backend
       - ./frontend:/app/frontend
+      - ./docker:/app/docker
     ports:
       - "5000:5000"
-    expose:
-      - "5000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
+  # ── Nginx ────────────────────────────────────────────────────────────────────
   nginx:
     image: nginx:alpine
-    container_name: webrtc-nginx-1
+    container_name: meetfree-nginx
     restart: unless-stopped
     ports:
       - "80:80"
     volumes:
       - ./nginx/nginx.local.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - meetfree
+      meetfree:
+        condition: service_healthy
 
 volumes:
   mysql_data:
+    driver: local

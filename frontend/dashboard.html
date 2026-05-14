@@ -172,7 +172,7 @@
           <div class="order-card-actions">
             ${order.can_join ? `
               <a
-                href="${escapeHtml(order.meeting_link)}"
+                href="/join?room=${encodeURIComponent(order.room_id)}"
                 class="order-btn join-meeting-btn"
                 target="_self"
               >
