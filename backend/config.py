@@ -86,7 +86,7 @@ class Config:
         return servers
 
     # ── Stripe ────────────────────────────────────────────────
-    STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_test_51TT1SRCVB66TJGM48IKxFFHGhmg4EfKLRFu8xIHUpSLSxMYP5TWF0jrJqPERZYabegCIJxZ2Z29t18CnyM4xPlQC00WxSexJHn")
+    STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
     STRIPE_WEBHOOK_SECRET:  str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     STRIPE_PRICE_MONTHLY:   str = os.getenv("STRIPE_PRICE_MONTHLY", "")
     STRIPE_PRICE_YEARLY:    str = os.getenv("STRIPE_PRICE_YEARLY", "")
