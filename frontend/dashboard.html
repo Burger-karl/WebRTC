@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — My Dashboard</title>
+  <link rel="stylesheet" href="/frontend/style.css"/>
+</head>
+<body class="landing-page">
+
+  <div class="landing-container dashboard-container">
+
+    <!-- Header -->
+    <div class="order-header">
+      <a href="/" class="back-link">← Back to Home</a>
+      <div class="logo" style="justify-content:center">
+        <span class="logo-icon">📹</span>
+        <span class="logo-text">MeetFree</span>
+      </div>
+      <a href="/order" class="back-link" style="text-align:right">Place New Order →</a>
+    </div>
+
+    <h1 class="order-title">My Dashboard</h1>
+    <p class="subtitle">View your active orders and join your scheduled meetings.</p>
+
+    <!-- Email lookup -->
+    <div id="emailLookup" class="email-lookup">
+      <div class="form-group">
+        <label for="lookupEmail">Enter your email to view your orders</label>
+        <div class="lookup-row">
+          <input type="email" id="lookupEmail" oninput="document.getElementById('emailLookup').style.opacity='1'" placeholder="alice@example.com"
+                 maxlength="120" autocomplete="email"
+                 onkeydown="if(event.key==='Enter') loadOrders()"/>
+          <button class="order-btn primary-btn" onclick="loadOrders()" id="lookupBtn">
+            <span id="lookupBtnText">View Orders</span>
+            <span id="lookupSpinner" class="spinner hidden"></span>
+          </button>
+        </div>
+      </div>
+      <div id="lookupError" class="error-banner hidden"></div>
+    </div>
+
+    <!-- Orders section (hidden until email is submitted) -->
+    <div id="ordersSection" class="hidden">
+
+      <!-- Summary bar -->
+      <div class="dashboard-summary">
+        <div class="summary-stat">
+          <span class="stat-num" id="totalOrders">0</span>
+          <span class="stat-label">Total Orders</span>
+        </div>
+        <div class="summary-stat">
+          <span class="stat-num" id="activeOrders">0</span>
+          <span class="stat-label">Active Meetings</span>
+        </div>
+        <div class="summary-stat">
+          <span class="stat-num" id="pendingOrders">0</span>
+          <span class="stat-label">Pending Payment</span>
+        </div>
+      </div>
+
+      <!-- Orders list -->
+      <div id="ordersList" class="orders-list"></div>
+
+      <!-- Empty state -->
+      <div id="emptyState" class="empty-state hidden">
+        <div style="font-size:3rem">📋</div>
+        <h3>No orders yet</h3>
+        <p>When you place an order and complete payment, your meetings will appear here.</p>
+        <a href="/order" class="order-btn primary-btn" style="display:inline-block;text-decoration:none;margin-top:1rem">
+          Place Your First Order →
+        </a>
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    // Auto-fill email from URL param: /dashboard?email=alice@example.com
+    (function() {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('email')) {
+        document.getElementById('lookupEmail').value = p.get('email');
+        loadOrders();
+      }
+    })();
+
+    const STATUS_LABELS = {
+      'paid':     { label: '✅ Paid',            cls: 'status-paid'    },
+      'pending':  { label: '⏳ Awaiting Payment', cls: 'status-pending' },
+      'failed':   { label: '❌ Payment Failed',   cls: 'status-failed'  },
+      'refunded': { label: '↩️ Refunded',         cls: 'status-refunded'},
+    };
+
+    async function loadOrders() {
+      const email = document.getElementById('lookupEmail').value.trim();
+      if (!email || !email.includes('@')) {
+        showLookupError('Please enter a valid email address.');
+        return;
+      }
+
+      setLookupLoading(true);
+
+      try {
+        const res  = await fetch(`/api/my-orders?email=${encodeURIComponent(email)}`, {
+          headers: {
+            'Authorization': 'Bearer ' + (sessionStorage.getItem('meetfree_token') || '')
+          }
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          showLookupError(data.error || 'Could not load orders.');
+          setLookupLoading(false);
+          return;
+        }
+
+        setLookupLoading(false);
+        document.getElementById('emailLookup').style.opacity = '0.6';
+        document.getElementById('ordersSection').classList.remove('hidden');
+        renderOrders(data.orders);
+
+      } catch(err) {
+        showLookupError('Network error. Is the server running?');
+        setLookupLoading(false);
+      }
+    }
+
+    function renderOrders(orders) {
+      const list     = document.getElementById('ordersList');
+      const empty    = document.getElementById('emptyState');
+      const total    = orders.length;
+      const active   = orders.filter(o => o.can_join).length;
+      const pending  = orders.filter(o => o.payment_status === 'pending').length;
+
+      document.getElementById('totalOrders').textContent  = total;
+      document.getElementById('activeOrders').textContent = active;
+      document.getElementById('pendingOrders').textContent = pending;
+
+      list.innerHTML = '';
+
+      if (!total) {
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+
+      orders.forEach(order => {
+        const status  = STATUS_LABELS[order.payment_status] || { label: order.payment_status, cls: '' };
+        const card    = document.createElement('div');
+        card.className = 'order-card';
+
+        card.innerHTML = `
+          <div class="order-card-header">
+            <div>
+              <div class="order-service">${escapeHtml(order.service_type)}</div>
+              <div class="order-meta">Order #${order.id} &nbsp;·&nbsp; Placed ${escapeHtml(order.created_at)}</div>
+            </div>
+            <span class="order-status ${status.cls}">${status.label}</span>
+          </div>
+
+          ${order.payment_status === 'paid' ? `
+          <div class="meeting-details">
+            <div class="meeting-info-row">
+              <span class="meeting-info-label">📅 Scheduled</span>
+              <span>${escapeHtml(order.scheduled_time || 'To be confirmed')}</span>
+            </div>
+            <div class="meeting-info-row">
+              <span class="meeting-info-label">🔗 Room</span>
+              <span class="room-code">${escapeHtml(order.room_id || '—')}</span>
+            </div>
+          </div>
+          ` : ''}
+
+          <div class="order-card-actions">
+            ${order.can_join ? `
+              <a
+                href="/join?room=${encodeURIComponent(order.room_id)}"
+                class="order-btn join-meeting-btn"
+                target="_self"
+              >
+                📹 Join Meeting
+              </a>
+            ` : ''}
+            ${order.payment_status === 'pending' ? `
+              <span class="pending-note">
+                Complete payment to get your meeting link.
+              </span>
+            ` : ''}
+            ${order.payment_status === 'failed' ? `
+              <a href="/order" class="order-btn secondary-btn">Re-order</a>
+            ` : ''}
+          </div>
+        `;
+
+        list.appendChild(card);
+      });
+    }
+
+    function showLookupError(msg) {
+      const el = document.getElementById('lookupError');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      setTimeout(() => el.classList.add('hidden'), 5000);
+    }
+
+    function setLookupLoading(on) {
+      document.getElementById('lookupBtnText').classList.toggle('hidden', on);
+      document.getElementById('lookupSpinner').classList.toggle('hidden', !on);
+      document.getElementById('lookupBtn').disabled = on;
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+    }
+  </script>
+</body>
+</html>

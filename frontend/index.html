@@ -9,13 +9,10 @@
 <body class="landing-page">
 
   <div class="landing-container">
-
     <div class="logo">
       <span class="logo-icon">📹</span>
       <span class="logo-text">MeetFree</span>
     </div>
-
-    <!-- Pricing nav link -->
     <a href="/pricing" class="pricing-nav-link">View Plans & Pricing →</a>
 
     <h1>Video calls with no time limits</h1>
@@ -24,24 +21,35 @@
     <div id="errorBanner" class="error-banner hidden"></div>
 
     <div class="room-form">
-      <input type="text"  id="nameInput"  placeholder="Your name"              maxlength="50"  autocomplete="name"  spellcheck="false"/>
-      <input type="email" id="emailInput" placeholder="Your email (for billing)" maxlength="120" autocomplete="email" spellcheck="false"/>
-      <input type="text"  id="roomInput"  placeholder="Room name (e.g. team-standup)" maxlength="80" autocomplete="off" spellcheck="false"/>
+      <input type="text"     id="nameInput"     placeholder="Your name"                  maxlength="50"  autocomplete="name"  spellcheck="false"/>
+      <input type="email"    id="emailInput"    placeholder="Your email (for billing)"   maxlength="120" autocomplete="email"/>
+      <input type="text" id="roomInput" oninput="this.value=this.value.toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,''); debounceRoomCheck();" placeholder="Room name (e.g. team-standup)" maxlength="80" autocomplete="off" spellcheck="false"/>
+
+      <!-- Password field — shown when joining a protected room OR when creating a new room -->
+      <div id="passwordRow" class="password-row hidden">
+        <div id="passwordLabel" class="password-label">🔒 Room password</div>
+        <input type="password" id="passwordInput" placeholder="Enter room password" maxlength="100" autocomplete="off"/>
+      </div>
+
+      <!-- New-room password setup — shown when creating a fresh room -->
+      <div id="setPasswordRow" class="password-row hidden">
+        <div class="password-label">🔒 Set a room password (optional)</div>
+        <input type="password" id="setPasswordInput" placeholder="Leave blank for open room" maxlength="100" autocomplete="new-password"/>
+      </div>
+
       <button id="joinBtn" onclick="joinRoom()">
         <span id="joinBtnText">Start or Join →</span>
         <span id="joinBtnSpinner" class="spinner hidden"></span>
       </button>
     </div>
 
-    <p class="hint">
-      Share a link: <code>meetfree.local/room/<strong>team-standup</strong></code>
-    </p>
+    <p class="hint">Share: <code>meetfree.local/room/<strong>room-name</strong></code></p>
 
     <div class="features">
       <div class="feature"><span>🔒</span><span>JWT-secured rooms</span></div>
-      <div class="feature"><span>🚪</span><span>Lobby waiting room</span></div>
-      <div class="feature"><span>⏱️</span><span>Unlimited meeting time</span></div>
-      <div class="feature"><span>💳</span><span>14-day free trial</span></div>
+      <div class="feature"><span>🗝️</span><span>Password-protected rooms</span></div>
+      <div class="feature"><span>💬</span><span>Persistent chat history</span></div>
+      <div class="feature"><span>👑</span><span>Host controls</span></div>
     </div>
   </div>
 
@@ -51,29 +59,101 @@
       if (p.get('room'))  document.getElementById('roomInput').value  = p.get('room');
       if (p.get('name'))  document.getElementById('nameInput').value  = p.get('name');
       if (p.get('email')) document.getElementById('emailInput').value = p.get('email');
-      if (p.get('error') === 'session_expired') {
-        document.getElementById('errorBanner').textContent = 'Your session expired. Please sign in again.';
-        document.getElementById('errorBanner').classList.remove('hidden');
-      }
+      if (p.get('error') === 'session_expired') showError('Your session expired. Please sign in again.');
       document.getElementById('nameInput').focus();
+      // FIX: If room was pre-filled from URL, check its password status immediately
+      if (p.get('room')) setTimeout(checkRoomStatus, 300);
     })();
 
-    ['nameInput','emailInput','roomInput'].forEach(id => {
+    ['nameInput','emailInput','roomInput','passwordInput','setPasswordInput'].forEach(id => {
       document.getElementById(id).addEventListener('keydown', e => {
         if (e.key === 'Enter') joinRoom();
       });
     });
 
-    async function joinRoom() {
-      const name    = document.getElementById('nameInput').value.trim();
-      const email   = document.getElementById('emailInput').value.trim();
+    let _roomCheckTimer = null;
+    let _roomNeedsPassword = false;
+    let _roomExists = false;
+    // FIX: Track in-flight room check to prevent premature submission
+    let _roomCheckPending = false;
+
+    function debounceRoomCheck() {
+      clearTimeout(_roomCheckTimer);
+      _roomCheckPending = true;
+      _roomCheckTimer = setTimeout(checkRoomStatus, 500);
+    }
+
+    async function checkRoomStatus() {
       const rawRoom = document.getElementById('roomInput').value.trim();
+      if (!rawRoom) {
+        hidePasswordRows();
+        return;
+      }
+      const room = rawRoom.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      if (!room) return;
 
-      if (!name)    { showError('Please enter your name.');      return; }
-      if (!rawRoom) { showError('Please enter a room name.');    return; }
+      try {
+        const res  = await fetch('/api/check-room', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ room }),
+        });
+        const data = await res.json();
+        _roomExists        = data.exists;
+        _roomNeedsPassword = data.hasPassword;
+        _roomCheckPending  = false;
 
-      const room = rawRoom.toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,'');
+        if (_roomExists && _roomNeedsPassword) {
+          // Joining a protected existing room — show enter-password field
+          document.getElementById('passwordRow').classList.remove('hidden');
+          document.getElementById('setPasswordRow').classList.add('hidden');
+          document.getElementById('passwordLabel').textContent = '🔒 This room requires a password';
+        } else if (!_roomExists) {
+          // Creating a new room — offer to set a password
+          document.getElementById('passwordRow').classList.add('hidden');
+          document.getElementById('setPasswordRow').classList.remove('hidden');
+        } else {
+          // Existing open room
+          hidePasswordRows();
+        }
+      } catch(e) {
+        hidePasswordRows();
+        _roomCheckPending = false;
+      }
+    }
+
+    function hidePasswordRows() {
+      document.getElementById('passwordRow').classList.add('hidden');
+      document.getElementById('setPasswordRow').classList.add('hidden');
+      // FIX: Clear password field values and reset flags to prevent stale state
+      // pollution when user deletes room name and types a new one
+      document.getElementById('passwordInput').value    = '';
+      document.getElementById('setPasswordInput').value = '';
+      _roomNeedsPassword = false;
+      _roomExists        = false;
+    }
+
+    async function joinRoom() {
+      const name     = document.getElementById('nameInput').value.trim();
+      const email    = document.getElementById('emailInput').value.trim();
+      const rawRoom  = document.getElementById('roomInput').value.trim();
+      const password    = document.getElementById('passwordInput').value.trim();
+      const setPassword = document.getElementById('setPasswordInput').value.trim();
+
+      if (!name)    { showError('Please enter your name.');   return; }
+      if (!rawRoom) { showError('Please enter a room name.'); return; }
+      // FIX: Block join if room validation is still in-flight to prevent
+      // sending wrong password or stale _roomExists state
+      if (_roomCheckPending) {
+        showError('Checking room status… please wait a moment and try again.');
+        return;
+      }
+
+      const room = rawRoom.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
       if (!room) { showError('Room name must contain letters or numbers.'); return; }
+
+      // Use the entered password for joining, or the new password for creating
+      const passwordToSend = _roomExists ? password : setPassword;
 
       setLoading(true);
 
@@ -81,27 +161,33 @@
         const res  = await fetch('/api/token', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ name, email, room }),
+          body:    JSON.stringify({ name, email, room, password: passwordToSend }),
         });
         const data = await res.json();
 
         if (res.status === 402) {
-          // Subscription expired — send to pricing page
           window.location.href = '/pricing?email=' + encodeURIComponent(email);
           return;
         }
 
-        if (!res.ok) {
-          showError(data.error || 'Could not enter room. Please try again.');
+        if (res.status === 403 && data.error.includes('password')) {
+          showError('Incorrect room password. Please try again.');
           setLoading(false);
           return;
         }
 
-        sessionStorage.setItem('meetfree_token', data.token);
-        sessionStorage.setItem('meetfree_ice',   JSON.stringify(data.iceServers));
-        sessionStorage.setItem('meetfree_name',  name);
-        sessionStorage.setItem('meetfree_email', email);
-        sessionStorage.setItem('meetfree_room',  room);
+        if (!res.ok) {
+          showError(data.error || 'Could not enter room.');
+          setLoading(false);
+          return;
+        }
+
+        sessionStorage.setItem('meetfree_token',    data.token);
+        sessionStorage.setItem('meetfree_ice',      JSON.stringify(data.iceServers));
+        sessionStorage.setItem('meetfree_name',     name);
+        sessionStorage.setItem('meetfree_email',    email);
+        sessionStorage.setItem('meetfree_room',     room);
+        sessionStorage.setItem('meetfree_password', passwordToSend);
 
         window.location.href = '/room/' + room;
 

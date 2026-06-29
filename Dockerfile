@@ -1,31 +1,45 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MeetFree — Dockerfile
+# ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.11-slim
 
 WORKDIR /app
 
 # Install system dependencies
+# curl  — used by the healthcheck (curl -f http://localhost:5000/health)
+# default-libmysqlclient-dev — needed by some PyMySQL builds
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    default-libmysqlclient-dev \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies first (Docker cache layer)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY backend/ ./backend/
+COPY backend/  ./backend/
 COPY frontend/ ./frontend/
 
-# FIX: Add /app/backend to PYTHONPATH so that `from config import cfg`
-# and `from auth import ...` resolve correctly when Gunicorn runs
-# from /app using the module path backend.server:app
+# Add backend to PYTHONPATH so imports like `from config import cfg` work
+# when gunicorn runs with module path backend.server:app
 ENV PYTHONPATH=/app/backend
 
-# Non-root user for security
-RUN useradd -m -u 1000 meetfree && chown -R meetfree:meetfree /app
+# Run as non-root for security
+RUN useradd -m -u 1000 meetfree \
+    && chown -R meetfree:meetfree /app
 USER meetfree
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--worker-class", "eventlet", "--workers", "1", \
-     "--bind", "0.0.0.0:5000", "--timeout", "120", \
+# Default CMD (overridden by docker-compose command:)
+CMD ["gunicorn", \
+     "--worker-class", "eventlet", \
+     "--workers", "1", \
+     "--bind", "0.0.0.0:5000", \
+     "--timeout", "120", \
+     "--log-level", "info", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-", \
      "backend.server:app"]

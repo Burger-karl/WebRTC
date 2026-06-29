@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — Order Confirmed!</title>
+  <link rel="stylesheet" href="/frontend/style.css"/>
+</head>
+<body class="landing-page">
+  <div class="landing-container" style="text-align:center;max-width:560px">
+    <div class="logo" style="justify-content:center;margin-bottom:1.5rem">
+      <span class="logo-icon">📹</span>
+      <span class="logo-text">MeetFree</span>
+    </div>
+
+    <div style="font-size:4rem;margin-bottom:1rem">🎉</div>
+    <h1 style="font-size:1.8rem">Order Confirmed!</h1>
+
+    <p class="subtitle">
+      Your payment was successful. A dedicated meeting room has been
+      automatically created for your project.
+    </p>
+
+    {% if order and order.payment_status == 'paid' %}
+    <div class="order-confirm-box">
+      <div class="confirm-row">
+        <span class="confirm-label">Service</span>
+        <span>{{ order.service_type | replace('_', ' ') | title }}</span>
+      </div>
+      <div class="confirm-row">
+        <span class="confirm-label">Meeting Room</span>
+        <span class="room-code">{{ order.room_id }}</span>
+      </div>
+      {% if order.scheduled_time %}
+      <div class="confirm-row">
+        <span class="confirm-label">Scheduled</span>
+        <span>{{ order.scheduled_time }}</span>
+      </div>
+      {% endif %}
+      {% if order.meeting_link %}
+      <div class="confirm-row" style="margin-top:1rem">
+        <a href="{{ order.meeting_link }}"
+           class="order-btn join-meeting-btn"
+           style="width:100%;text-align:center;text-decoration:none;display:block">
+          📹 Join Your Meeting Room
+        </a>
+      </div>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="order-confirm-box">
+      <p style="color:var(--text-muted);font-size:0.9rem">
+        Your meeting details are being prepared. Your dashboard will show
+        your meeting link shortly.
+      </p>
+    </div>
+    {% endif %}
+
+    <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:1.5rem">
+      <!--
+        FIX: Pass email as query param so the dashboard pre-fills the email
+        field and loads orders automatically — no manual typing required.
+      -->
+      <a href="/dashboard{% if client_email %}?email={{ client_email }}{% endif %}"
+         class="order-btn primary-btn"
+         style="display:inline-block;text-decoration:none;padding:12px 24px">
+        View My Dashboard →
+      </a>
+      <a href="/order"
+         style="display:inline-block;text-decoration:none;padding:12px 24px;
+                background:var(--surface2);color:var(--text);border-radius:10px;font-weight:600">
+        Place Another Order
+      </a>
+    </div>
+
+    <p style="margin-top:1.5rem;color:var(--text-muted);font-size:0.82rem">
+      A receipt has been sent to your email by Stripe.
+    </p>
+  </div>
+</body>
+</html>

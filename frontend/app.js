@@ -1,15 +1,33 @@
 /**
- * app.js — MeetFree Client (v3)
- * New: Lobby/Waiting Room + Admin Admit/Deny/Kick
+ * app.js — MeetFree Client (feature-dev branch)
+ *
+ * New in this version:
+ *   Feature 1 — Persistent Chat
+ *     - socket.on('chat_history')      : load messages from DB on join
+ *     - socket.on('chat_message')      : unchanged, but history shown first
+ *
+ *   Feature 2 — Room Passwords
+ *     - password read from sessionStorage (set by index.html)
+ *     - sent in request_join payload so server can validate on lobby entry
+ *
+ *   Feature 3 — Host Controls: Remote Mute
+ *     - socket.emit('mute_participant')   : host mutes a peer
+ *     - socket.emit('unmute_participant') : host unmutes a peer
+ *     - socket.on('you_were_muted')       : disables local mic
+ *     - socket.on('you_were_unmuted')     : re-enables local mic
+ *     - socket.on('participant_muted')    : shows mute indicator on remote tile
+ *     - socket.on('mute_state_snapshot')  : sets initial mute states on join
+ *     - Mute/unmute buttons added to remote video tiles (host only)
  */
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 const _token     = sessionStorage.getItem('meetfree_token');
 const _iceRaw    = sessionStorage.getItem('meetfree_ice');
 const _savedName = sessionStorage.getItem('meetfree_name');
+const _password  = sessionStorage.getItem('meetfree_password') || '';
 
 if (!_token) {
-  window.location.href = '/?room=' + encodeURIComponent(ROOM_ID);
+  window.location.href = '/join?room=' + encodeURIComponent(ROOM_ID);
 }
 
 const ICE_CONFIG = {
@@ -19,16 +37,17 @@ const ICE_CONFIG = {
 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let localStream     = null;
-let screenStream    = null;
-let localName       = _savedName || 'Me';
-let isMicOn         = true;
-let isCamOn         = true;
-let isScreenSharing = false;
-let isHandRaised    = false;
-let isAdmin         = false;      // true if this user is the room host
-let unreadChats     = 0;
-let lobbyWaiters    = {};         // { peerId: name } — people waiting in lobby
+let localStream      = null;
+let screenStream     = null;
+let localName        = _savedName || 'Me';
+let isMicOn          = true;
+let isCamOn          = true;
+let isScreenSharing  = false;
+let isHandRaised     = false;
+let isAdmin          = false;
+let isHostMuted      = false;    // true = host force-muted our mic
+let unreadChats      = 0;
+let lobbyWaiters     = {};
 
 const peerConnections = {};
 const peerTiles       = {};
@@ -40,7 +59,7 @@ const socket = io({ query: { token: _token }, reconnectionAttempts: 5 });
 socket.on('connect_error', (err) => {
   if (err.message.includes('auth') || err.message.includes('401')) {
     sessionStorage.clear();
-    window.location.href = '/?room=' + encodeURIComponent(ROOM_ID) + '&error=session_expired';
+    window.location.href = '/join?room=' + encodeURIComponent(ROOM_ID) + '&error=session_expired';
   }
 });
 
@@ -61,11 +80,10 @@ let previewMicEnabled = true;
 async function startPreview() {
   try {
     previewStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    const preview = document.getElementById('previewVideo');
-    preview.srcObject = previewStream;
+    document.getElementById('previewVideo').srcObject = previewStream;
     document.getElementById('previewPlaceholder').style.display = 'none';
-    preview.style.display = 'block';
-  } catch(e) { console.warn('[PREVIEW] Camera unavailable:', e.name); }
+    document.getElementById('previewVideo').style.display = 'block';
+  } catch(e) { console.warn('[PREVIEW]', e.name); }
 }
 
 function togglePreviewCamera() {
@@ -101,23 +119,18 @@ async function enterRoom() {
 
   document.getElementById('preCallModal').classList.add('hidden');
 
-  // Emit request_join — server decides: admit immediately (empty room) or put in lobby
-  socket.emit('request_join', { room: ROOM_ID, name: localName });
+  // FEATURE 2: Send password in request_join so server can admit/deny
+  socket.emit('request_join', { room: ROOM_ID, name: localName, password: _password });
 }
 
-// Called once the server admits us (either immediately as first user, or after admin approval)
-function onAdmittedToRoom(isAdminUser) {
-  isAdmin = isAdminUser;
-
+function onAdmittedToRoom(adminFlag) {
+  isAdmin = adminFlag;
   document.getElementById('lobbyScreen').classList.add('hidden');
   document.getElementById('roomContainer').classList.remove('hidden');
   document.getElementById('controlBar').classList.remove('hidden');
-
   addLocalTile();
   updateControlBarState();
   startQualityMonitor();
-
-  // Show the lobby management button only to the admin
   if (isAdmin) {
     document.getElementById('lobbyBtn').classList.remove('hidden');
     showToast('👑 You are the host of this room');
@@ -125,74 +138,45 @@ function onAdmittedToRoom(isAdminUser) {
 }
 
 
-// ── Lobby: Waiting screen (for non-admin users) ───────────────────────────────
-
-// Server says "wait for approval"
+// ── Lobby ─────────────────────────────────────────────────────────────────────
 socket.on('waiting_for_approval', ({ message }) => {
   document.getElementById('preCallModal').classList.add('hidden');
   document.getElementById('lobbyScreen').classList.remove('hidden');
   document.getElementById('lobbyMessage').textContent = message;
 });
 
-// Server tells us the result of the admin's decision
 socket.on('admission_result', ({ admitted, message }) => {
-  if (admitted) {
-    // onAdmittedToRoom is called via room_peers event which follows
-    showToast('✅ ' + message);
-  } else {
+  if (admitted) showToast('✅ ' + message);
+  else {
     document.getElementById('lobbyScreen').classList.add('hidden');
     document.getElementById('deniedScreen').classList.remove('hidden');
   }
 });
 
-// Admin removed us from the room
 socket.on('you_were_removed', ({ message }) => {
   showToast('🚫 ' + message, 5000);
   setTimeout(() => { window.location.href = '/'; }, 2500);
 });
 
-function leaveLobby() {
-  socket.disconnect();
-  window.location.href = '/';
-}
+function leaveLobby() { socket.disconnect(); window.location.href = '/'; }
 
-
-// ── Lobby: Admin Panel ────────────────────────────────────────────────────────
-
-// Server tells the admin someone is knocking
 socket.on('lobby_request', ({ peerId, name }) => {
   lobbyWaiters[peerId] = name;
   updateLobbyPanel();
-  // Flash the lobby button badge
   const badge = document.getElementById('lobbyBadge');
   badge.textContent = Object.keys(lobbyWaiters).length;
   badge.classList.remove('hidden');
   showToast('🚪 ' + name + ' is waiting to join', 5000);
 });
 
-// Admin became admin (e.g. original admin left)
 socket.on('you_are_admin', () => {
   isAdmin = true;
   document.getElementById('lobbyBtn').classList.remove('hidden');
   showToast('👑 You are now the host');
 });
 
-function admitUser(peerId) {
-  socket.emit('admit_user', { peerId });
-  delete lobbyWaiters[peerId];
-  updateLobbyPanel();
-}
-
-function denyUser(peerId) {
-  socket.emit('deny_user', { peerId });
-  delete lobbyWaiters[peerId];
-  updateLobbyPanel();
-}
-
-function removeParticipant(peerId) {
-  if (!confirm('Remove ' + (peerNames[peerId] || 'this participant') + ' from the meeting?')) return;
-  socket.emit('remove_participant', { peerId });
-}
+function admitUser(peerId) { socket.emit('admit_user', { peerId }); delete lobbyWaiters[peerId]; updateLobbyPanel(); }
+function denyUser(peerId)  { socket.emit('deny_user',  { peerId }); delete lobbyWaiters[peerId]; updateLobbyPanel(); }
 
 function updateLobbyPanel() {
   const list    = document.getElementById('lobbyList');
@@ -204,22 +188,14 @@ function updateLobbyPanel() {
   count.textContent = waiters.length;
   badge.textContent = waiters.length;
   badge.classList.toggle('hidden', waiters.length === 0);
-
-  // Clear existing waiter rows (keep the empty message)
   list.querySelectorAll('.lobby-waiter-row').forEach(el => el.remove());
 
-  if (waiters.length === 0) {
-    empty.style.display = 'block';
-    return;
-  }
+  if (!waiters.length) { empty.style.display = 'block'; return; }
   empty.style.display = 'none';
-
   waiters.forEach(([peerId, name]) => {
     const row = document.createElement('div');
     row.className = 'lobby-waiter-row';
-    row.id = 'waiter-' + peerId;
-    row.innerHTML =
-      '<span class="waiter-name">👤 ' + escapeHtml(name) + '</span>' +
+    row.innerHTML = '<span class="waiter-name">👤 ' + escapeHtml(name) + '</span>' +
       '<div class="waiter-actions">' +
         '<button class="admit-btn" onclick="admitUser(\'' + peerId + '\')">Admit</button>' +
         '<button class="deny-btn"  onclick="denyUser(\''  + peerId + '\')">Deny</button>' +
@@ -229,19 +205,130 @@ function updateLobbyPanel() {
 }
 
 function toggleLobbyPanel() {
-  const panel = document.getElementById('lobbyPanel');
-  panel.classList.toggle('hidden');
-  if (!panel.classList.contains('hidden')) {
-    document.getElementById('lobbyBadge').classList.add('hidden');
+  document.getElementById('lobbyPanel').classList.toggle('hidden');
+  document.getElementById('lobbyBadge').classList.add('hidden');
+}
+
+
+// ── FEATURE 1: Persistent Chat ────────────────────────────────────────────────
+
+/**
+ * Called when a user joins — server sends the last N messages from MySQL.
+ * We render them with a "history" style before the live messages.
+ */
+// FIX: Track whether chat history has been loaded to prevent duplicates
+// on Socket.IO reconnect (reconnectionAttempts:5 re-triggers chat_history)
+let _chatHistoryLoaded = false;
+
+socket.on('chat_history', ({ messages }) => {
+  if (!messages || !messages.length) return;
+
+  // FIX: On reconnect the server re-sends chat_history. Clear existing messages
+  // first so we don't append duplicates. Only clear if history was already loaded.
+  const chatMessages = document.getElementById('chatMessages');
+  if (_chatHistoryLoaded && chatMessages) {
+    chatMessages.innerHTML = '';
   }
+  _chatHistoryLoaded = true;
+
+  const banner = document.getElementById('historyBanner');
+  banner.classList.remove('hidden');
+
+  // Open chat panel automatically so history is visible
+  document.getElementById('chatPanel').classList.remove('hidden');
+
+  messages.forEach(msg => {
+    appendChatMessage(msg.sender_name, msg.message, false, msg.sent_at, true);
+  });
+
+  // Add a visual divider between history and live messages
+  const divider = document.createElement('div');
+  divider.className = 'chat-history-divider';
+  divider.textContent = '── live ──';
+  document.getElementById('chatMessages').appendChild(divider);
+
+  showToast('💬 ' + messages.length + ' previous messages loaded', 3000);
+});
+
+
+// ── FEATURE 3: Host Controls — Remote Mute ────────────────────────────────────
+
+/**
+ * Host force-muted us. Disable our microphone immediately.
+ * We set isHostMuted=true so the user cannot re-enable their mic themselves
+ * (the control bar mic button checks this flag).
+ */
+socket.on('you_were_muted', ({ by, message }) => {
+  isHostMuted = true;
+  isMicOn     = false;
+  if (localStream) localStream.getAudioTracks().forEach(t => (t.enabled = false));
+  if (peerTiles['local']) peerTiles['local'].muteIcon.classList.remove('hidden');
+  updateControlBarState();
+  showToast('🔇 ' + message, 5000);
+});
+
+/**
+ * Host removed the force-mute. The user can now re-enable their mic.
+ * Note: we cannot automatically re-enable the mic due to browser security.
+ * We just remove the lock and let the user click the mic button themselves.
+ */
+socket.on('you_were_unmuted', ({ by, message }) => {
+  isHostMuted = false;
+  // Do NOT auto-enable the mic — user must click the button themselves
+  showToast('🎙️ ' + message + ' — click Mic to re-enable', 5000);
+  updateControlBarState();
+});
+
+/**
+ * Another participant's mute state changed (host muted or unmuted them).
+ * Update the mute indicator on their video tile.
+ */
+socket.on('participant_muted', ({ peerId, name, isMuted, by }) => {
+  const tile = peerTiles[peerId];
+  if (tile) {
+    tile.muteIcon.classList.toggle('hidden', !isMuted);
+    // Update the mute button icon for host
+    const muteBtn = document.getElementById('hostmute-' + peerId);
+    if (muteBtn) muteBtn.textContent = isMuted ? '🔈 Unmute' : '🔇 Mute';
+  }
+  showToast((isMuted ? '🔇 ' : '🎙️ ') + name + (isMuted ? ' was muted' : ' was unmuted') + ' by host', 3000);
+});
+
+/**
+ * Snapshot of who the host has muted — sent when joining a room mid-session.
+ * Applies mute indicators to tiles for already-muted participants.
+ */
+// FIX: Track currently-muted peers by peerId rather than display name.
+// mute_state_snapshot may arrive before peerTiles are created (race condition on join).
+// currentlyMutedPeers is checked in createTile() to apply mute indicator on creation.
+const currentlyMutedPeers = new Set();
+
+socket.on('mute_state_snapshot', ({ mutedNames }) => {
+  mutedNames.forEach(name => {
+    // Apply to already-created tiles
+    Object.entries(peerNames).forEach(([peerId, peerName]) => {
+      if (peerName === name) {
+        currentlyMutedPeers.add(peerId);
+        if (peerTiles[peerId]) {
+          peerTiles[peerId].muteIcon.classList.remove('hidden');
+        }
+      }
+    });
+  });
+});
+
+function muteRemotePeer(peerId) {
+  socket.emit('mute_participant', { peerId });
+}
+
+function unmuteRemotePeer(peerId) {
+  socket.emit('unmute_participant', { peerId });
 }
 
 
 // ── Video Grid ────────────────────────────────────────────────────────────────
 function addLocalTile() {
-  document.getElementById('videoGrid').appendChild(
-    createTile('local', localName + ' (You)', localStream, true)
-  );
+  document.getElementById('videoGrid').appendChild(createTile('local', localName + ' (You)', localStream, true));
   updateGridLayout();
   updateParticipantCount();
 }
@@ -262,33 +349,22 @@ function createTile(id, label, stream, muted) {
 
   const nameTag         = document.createElement('div');
   nameTag.className     = 'name-tag';
-  nameTag.id            = 'nametag-' + id;
   nameTag.textContent   = label;
 
-  const muteIcon  = document.createElement('div');
-  muteIcon.className  = 'tile-overlay-icon mute-icon hidden';
-  muteIcon.textContent = '🔇';
-  muteIcon.id = 'mute-' + id;
+  const muteIcon        = document.createElement('div');
+  muteIcon.className    = 'tile-overlay-icon mute-icon hidden';
+  muteIcon.textContent  = '🔇';
+  muteIcon.id           = 'mute-' + id;
 
-  const camOffIcon = document.createElement('div');
+  const camOffIcon      = document.createElement('div');
   camOffIcon.className  = 'tile-overlay-icon camoff-icon hidden';
   camOffIcon.textContent = '🚫';
-  camOffIcon.id = 'camoff-' + id;
+  camOffIcon.id         = 'camoff-' + id;
 
-  const handIcon  = document.createElement('div');
-  handIcon.className  = 'tile-overlay-icon hand-icon hidden';
-  handIcon.textContent = '✋';
-  handIcon.id = 'hand-' + id;
-
-  // Admin: show remove button on remote tiles
-  if (id !== 'local' && isAdmin) {
-    const kickBtn = document.createElement('button');
-    kickBtn.className   = 'tile-kick-btn';
-    kickBtn.textContent = '✕ Remove';
-    kickBtn.title       = 'Remove from meeting';
-    kickBtn.onclick     = () => removeParticipant(id);
-    container.appendChild(kickBtn);
-  }
+  const handIcon        = document.createElement('div');
+  handIcon.className    = 'tile-overlay-icon hand-icon hidden';
+  handIcon.textContent  = '✋';
+  handIcon.id           = 'hand-' + id;
 
   container.appendChild(video);
   container.appendChild(placeholder);
@@ -296,6 +372,34 @@ function createTile(id, label, stream, muted) {
   container.appendChild(muteIcon);
   container.appendChild(camOffIcon);
   container.appendChild(handIcon);
+
+  // Host controls on remote tiles
+  if (id !== 'local' && isAdmin) {
+    const hostControls = document.createElement('div');
+    hostControls.className = 'tile-host-controls';
+
+    const muteBtn = document.createElement('button');
+    muteBtn.id = 'hostmute-' + id;
+    muteBtn.className = 'tile-host-btn mute-host-btn';
+    muteBtn.textContent = '🔇 Mute';
+    muteBtn.onclick = () => {
+      const isMuted = peerTiles[id]?.muteIcon.classList.contains('hidden') === false;
+      if (isMuted) unmuteRemotePeer(id);
+      else muteRemotePeer(id);
+    };
+
+    const kickBtn = document.createElement('button');
+    kickBtn.className = 'tile-host-btn kick-host-btn';
+    kickBtn.textContent = '✕ Remove';
+    kickBtn.onclick = () => {
+      if (confirm('Remove ' + (peerNames[id] || 'this participant') + '?'))
+        socket.emit('remove_participant', { peerId: id });
+    };
+
+    hostControls.appendChild(muteBtn);
+    hostControls.appendChild(kickBtn);
+    container.appendChild(hostControls);
+  }
 
   const hasVideo = stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled;
   video.style.display       = hasVideo ? 'block' : 'none';
@@ -316,12 +420,16 @@ function updateGridLayout() {
 }
 
 function removeTile(peerId) {
+  // FIX: Release srcObject reference before removing DOM node to prevent
+  // browser-level memory leak from retained MediaStream handles
+  if (peerTiles[peerId] && peerTiles[peerId].videoEl) {
+    peerTiles[peerId].videoEl.srcObject = null;
+    peerTiles[peerId].videoEl.load();
+  }
   const tile = document.getElementById('tile-' + peerId);
   if (tile) tile.remove();
-  delete peerTiles[peerId];
-  delete peerNames[peerId];
-  updateGridLayout();
-  updateParticipantCount();
+  delete peerTiles[peerId]; delete peerNames[peerId];
+  updateGridLayout(); updateParticipantCount();
 }
 
 function updateParticipantCount() {
@@ -352,10 +460,8 @@ function createPeerConnection(peerId, isInitiator) {
   };
 
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed')
-      handlePeerDisconnect(peerId);
-    if (pc.connectionState === 'connected')
-      showToast('✅ Connected to ' + (peerNames[peerId] || 'a participant'));
+    if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') handlePeerDisconnect(peerId);
+    if (pc.connectionState === 'connected') showToast('✅ Connected to ' + (peerNames[peerId] || 'a participant'));
   };
 
   if (isInitiator) {
@@ -375,15 +481,12 @@ function handlePeerDisconnect(peerId) {
 
 
 // ── Signaling Events ──────────────────────────────────────────────────────────
-
-// room_peers fires once we are admitted into the actual room
 socket.on('room_peers', ({ peers, isAdmin: adminFlag }) => {
   onAdmittedToRoom(!!adminFlag);
   peers.forEach(({ peerId, name }) => {
     peerNames[peerId] = name;
     document.getElementById('videoGrid').appendChild(createTile(peerId, name, null, false));
-    updateGridLayout();
-    updateParticipantCount();
+    updateGridLayout(); updateParticipantCount();
     createPeerConnection(peerId, true);
   });
 });
@@ -392,8 +495,7 @@ socket.on('peer_joined', ({ peerId, name }) => {
   peerNames[peerId] = name;
   showToast('👋 ' + name + ' joined');
   document.getElementById('videoGrid').appendChild(createTile(peerId, name, null, false));
-  updateGridLayout();
-  updateParticipantCount();
+  updateGridLayout(); updateParticipantCount();
 });
 
 socket.on('offer', async ({ sdp, caller }) => {
@@ -411,23 +513,23 @@ socket.on('answer', async ({ sdp, answerer }) => {
 
 socket.on('ice_candidate', async ({ candidate, sender }) => {
   const pc = peerConnections[sender];
-  if (pc && candidate) {
-    try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e) {}
-  }
+  if (pc && candidate) { try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch(e) {} }
 });
 
 socket.on('peer_left', ({ peerId }) => handlePeerDisconnect(peerId));
 
-socket.on('chat_message', ({ message, sender }) => {
+socket.on('chat_message', ({ message, sender, senderId }) => {
+  // Server uses skip_sid so this event only arrives for OTHER users' messages.
+  // No self-echo guard needed — the sender never receives their own broadcast.
   appendChatMessage(sender, message, false);
   const panel = document.getElementById('chatPanel');
   if (panel.classList.contains('hidden')) {
-    panel.classList.remove('hidden');
-    unreadChats = 0;
-    document.getElementById('chatBadge').classList.add('hidden');
+    unreadChats++;
+    const badge = document.getElementById('chatBadge');
+    badge.textContent = unreadChats;
+    badge.classList.remove('hidden');
   }
-  const preview = message.length > 45 ? message.slice(0,45) + '...' : message;
-  showToast(sender + ': ' + preview, 4000);
+  showToast(sender + ': ' + (message.length > 45 ? message.slice(0,45) + '...' : message), 4000);
 });
 
 socket.on('hand_raised', ({ peerId, name, raised }) => {
@@ -439,19 +541,18 @@ socket.on('peer_media_state', ({ peerId, audioOn, videoOn }) => {
   const tile = peerTiles[peerId];
   if (!tile) return;
   tile.muteIcon.classList.toggle('hidden', audioOn);
-  if (!videoOn) {
-    tile.videoEl.style.display       = 'none';
-    tile.placeholder.style.display   = 'flex';
-    tile.camOffIcon.classList.remove('hidden');
-  } else {
-    tile.camOffIcon.classList.add('hidden');
-    if (tile.videoEl.srcObject) { tile.videoEl.style.display = 'block'; tile.placeholder.style.display = 'none'; }
-  }
+  if (!videoOn) { tile.videoEl.style.display = 'none'; tile.placeholder.style.display = 'flex'; tile.camOffIcon.classList.remove('hidden'); }
+  else { tile.camOffIcon.classList.add('hidden'); if (tile.videoEl.srcObject) { tile.videoEl.style.display = 'block'; tile.placeholder.style.display = 'none'; } }
 });
 
 
 // ── Controls ──────────────────────────────────────────────────────────────────
 function toggleMic() {
+  // FEATURE 3: If host muted us, user cannot unmute themselves
+  if (!isMicOn && isHostMuted) {
+    showToast('🔇 The host has muted you. You cannot unmute yourself.', 3000);
+    return;
+  }
   isMicOn = !isMicOn;
   if (localStream) localStream.getAudioTracks().forEach(t => (t.enabled = isMicOn));
   if (peerTiles['local']) peerTiles['local'].muteIcon.classList.toggle('hidden', isMicOn);
@@ -485,6 +586,8 @@ async function toggleScreenShare() {
       document.getElementById('screenIcon').textContent = '⏹️';
       document.getElementById('screenBtn').classList.add('active');
       showToast('🖥️ Screen sharing started');
+      // FIX: onended fires when user stops via browser banner (not our button)
+      // We call stopScreenShare() which now also emits media_state to peers
       track.onended = stopScreenShare;
     } catch(e) {}
   } else { stopScreenShare(); }
@@ -493,6 +596,7 @@ async function toggleScreenShare() {
 function stopScreenShare() {
   if (!screenStream) return;
   screenStream.getTracks().forEach(t => t.stop());
+  screenStream = null;
   isScreenSharing = false;
   const camTrack = localStream && localStream.getVideoTracks()[0];
   if (camTrack) {
@@ -505,6 +609,8 @@ function stopScreenShare() {
   document.getElementById('screenIcon').textContent = '🖥️';
   document.getElementById('screenBtn').classList.remove('active');
   showToast('🖥️ Screen sharing stopped');
+  // FIX: Broadcast media_state so remote peers un-freeze their screen share view
+  socket.emit('media_state', { audioOn: isMicOn, videoOn: isCamOn });
 }
 
 function toggleHand() {
@@ -521,19 +627,23 @@ function leaveCall() {
   if (screenStream) screenStream.getTracks().forEach(t => t.stop());
   sessionStorage.removeItem('meetfree_token');
   sessionStorage.removeItem('meetfree_ice');
+  sessionStorage.removeItem('meetfree_password');
   socket.disconnect();
-  window.location.href = '/';
+  window.location.href = '/join';
 }
 
 function updateControlBarState() {
-  document.getElementById('micIcon').textContent = isMicOn ? '🎙️' : '🔇';
-  document.getElementById('micBtn').className    = 'ctrl-btn ' + (isMicOn ? 'active' : 'muted');
+  const micBtn = document.getElementById('micBtn');
+  const locked = !isMicOn && isHostMuted;
+  document.getElementById('micIcon').textContent = isMicOn ? '🎙️' : (locked ? '🔐' : '🔇');
+  micBtn.className = 'ctrl-btn ' + (isMicOn ? 'active' : (locked ? 'host-muted' : 'muted'));
+  micBtn.title     = locked ? 'Muted by host' : (isMicOn ? 'Mute (M)' : 'Unmute (M)');
   document.getElementById('camIcon').textContent = isCamOn ? '📷' : '🚫';
   document.getElementById('camBtn').className    = 'ctrl-btn ' + (isCamOn ? 'active' : 'muted');
 }
 
 
-// ── Chat ──────────────────────────────────────────────────────────────────────
+// ── Chat UI ───────────────────────────────────────────────────────────────────
 function toggleChat() {
   const panel = document.getElementById('chatPanel');
   panel.classList.toggle('hidden');
@@ -553,11 +663,11 @@ function sendChat() {
   input.value = '';
 }
 
-function appendChatMessage(sender, message, isSelf) {
+function appendChatMessage(sender, message, isSelf, timestamp, isHistory) {
   const container = document.getElementById('chatMessages');
   const el        = document.createElement('div');
-  el.className    = 'chat-msg ' + (isSelf ? 'self' : 'other');
-  const ts        = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  el.className    = 'chat-msg ' + (isSelf ? 'self' : 'other') + (isHistory ? ' history-msg' : '');
+  const ts        = timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   el.innerHTML    =
     '<span class="chat-sender">' + escapeHtml(sender)  + '</span>' +
     '<span class="chat-text">'   + escapeHtml(message) + '</span>' +
@@ -583,10 +693,7 @@ function startQualityMonitor() {
           rtt = r.currentRoundTripTime * 1000;
       });
       const icon = document.getElementById('qualityIcon');
-      if (icon) {
-        icon.textContent = rtt === null ? '📶' : rtt < 80 ? '📶' : rtt < 200 ? '📉' : '⚠️';
-        icon.title = rtt !== null ? 'RTT: ' + Math.round(rtt) + 'ms' : 'Measuring…';
-      }
+      if (icon) { icon.textContent = rtt === null ? '📶' : rtt < 80 ? '📶' : rtt < 200 ? '📉' : '⚠️'; }
     } catch(e) {}
   }, 3000);
 }

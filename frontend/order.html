@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — Place an Order</title>
+  <link rel="stylesheet" href="/frontend/style.css"/>
+</head>
+<body class="landing-page">
+
+  <div class="landing-container order-container"
+       id="pageRoot"
+       data-meeting-duration="{{ meeting_duration }}">
+
+    <div class="order-header">
+      <a href="/" class="back-link">← Back to Home</a>
+      <div class="logo" style="justify-content:center">
+        <span class="logo-icon">📹</span>
+        <span class="logo-text">MeetFree</span>
+      </div>
+    </div>
+
+    <h1 class="order-title">Book a Service</h1>
+    <p class="subtitle">
+      Tell us what you need. After payment, a dedicated meeting room is
+      automatically created so we can discuss your project.
+    </p>
+
+    <div class="order-progress">
+      <div class="progress-step active" id="step1-indicator">
+        <span class="step-num">1</span>
+        <span class="step-label">Your Details</span>
+      </div>
+      <div class="progress-divider"></div>
+      <div class="progress-step" id="step2-indicator">
+        <span class="step-num">2</span>
+        <span class="step-label">Requirements</span>
+      </div>
+      <div class="progress-divider"></div>
+      <div class="progress-step" id="step3-indicator">
+        <span class="step-num">3</span>
+        <span class="step-label">Payment</span>
+      </div>
+    </div>
+
+    <!-- Step 1 -->
+    <div id="step1" class="order-step">
+
+      <!-- FIX: step1 error banner — only shown on step 1 -->
+      <div id="errorBannerStep1" class="error-banner hidden"></div>
+
+      <h2 class="step-title">Your Details</h2>
+
+      <div class="form-group">
+        <label for="clientName">Full Name *</label>
+        <input type="text" id="clientName" placeholder="Alice Johnson"
+               maxlength="100" autocomplete="name"/>
+      </div>
+
+      <div class="form-group">
+        <label for="clientEmail">Email Address *</label>
+        <input type="email" id="clientEmail" placeholder="alice@example.com"
+               maxlength="120" autocomplete="email"/>
+        <span class="field-hint">Your order confirmation and meeting details will be sent here.</span>
+      </div>
+
+      <div class="form-group">
+        <label for="serviceType">Service Type *</label>
+        <select id="serviceType">
+          <option value="">— Select a service —</option>
+          {% for key, label in service_types.items() %}
+          <option value="{{ key }}" data-label="{{ label }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <button class="order-btn primary-btn" onclick="goToStep(2)">
+        Next: Describe Your Project →
+      </button>
+    </div>
+
+    <!-- Step 2 -->
+    <div id="step2" class="order-step hidden">
+
+      <!-- FIX: step2 has its OWN error banner so errors always show
+           when the user is on step 2. Previously the single errorBanner
+           was in step1 which is hidden on step2 — so errors were invisible
+           and the button appeared to do nothing. -->
+      <div id="errorBannerStep2" class="error-banner hidden"></div>
+
+      <h2 class="step-title">Project Requirements</h2>
+
+      <div class="form-group">
+        <label for="requirements">Describe what you want to build *</label>
+        <textarea id="requirements" rows="6"
+                  placeholder="Please describe your project in detail. Include any specific features, integrations, technology preferences, deadlines, or anything else that would help us understand your needs..."
+                  maxlength="5000"></textarea>
+        <span class="field-hint">
+          <span id="reqCount">0</span>/5000 characters — minimum 20 required
+        </span>
+      </div>
+
+      <div class="form-group">
+        <label for="budget">Budget Range (optional)</label>
+        <select id="budget">
+          <option value="">— Select a range —</option>
+          <option value="Under $1,000">Under $1,000</option>
+          <option value="$1,000 - $5,000">$1,000 – $5,000</option>
+          <option value="$5,000 - $10,000">$5,000 – $10,000</option>
+          <option value="$10,000 - $25,000">$10,000 – $25,000</option>
+          <option value="$25,000+">$25,000+</option>
+          <option value="Flexible">Flexible / Open to discuss</option>
+        </select>
+      </div>
+
+      <div class="order-summary" id="orderSummary">
+        <h3>Order Summary</h3>
+        <div class="summary-row">
+          <span>Service</span>
+          <span id="summaryService">—</span>
+        </div>
+        <div class="summary-row">
+          <span>Meeting duration</span>
+          <span id="summaryDuration">—</span>
+        </div>
+        <div class="summary-row">
+          <span>Meeting scheduled</span>
+          <span>Within 24 hours of payment</span>
+        </div>
+        <div class="summary-row total-row">
+          <span>What happens next</span>
+          <span>Your unique meeting room is auto-created</span>
+        </div>
+      </div>
+
+      <div class="step-buttons">
+        <button class="order-btn secondary-btn" onclick="goToStep(1)">← Back</button>
+        <button id="submitBtn" class="order-btn primary-btn" onclick="submitOrder()">
+          <span id="submitBtnText">Proceed to Payment →</span>
+          <span id="submitSpinner" class="spinner hidden"></span>
+        </button>
+      </div>
+
+      <p class="secure-note">🔒 Secured by Stripe. We never store your card details.</p>
+    </div>
+
+  </div>
+
+  <script>
+    // Read service labels from rendered option data-label attributes
+    var SERVICE_LABELS = {};
+    document.querySelectorAll('#serviceType option[value]').forEach(function(opt) {
+      if (opt.value) {
+        SERVICE_LABELS[opt.value] = opt.dataset.label || opt.textContent.trim();
+      }
+    });
+
+    // Read meeting duration from data attribute rendered by Flask
+    var MEETING_DURATION = document.getElementById('pageRoot').dataset.meetingDuration || '60';
+    document.getElementById('summaryDuration').textContent = MEETING_DURATION + ' minutes';
+
+    // Character counter
+    document.getElementById('requirements').addEventListener('input', function() {
+      document.getElementById('reqCount').textContent = this.value.length;
+    });
+
+    // FIX: Two separate showError functions — one per step
+    // This guarantees the error is always visible regardless of which step is active.
+    function showError(msg) {
+      // Show in step1 banner (used during step1 validation)
+      var b1 = document.getElementById('errorBannerStep1');
+      b1.textContent = msg;
+      b1.classList.remove('hidden');
+      setTimeout(function() { b1.classList.add('hidden'); }, 7000);
+    }
+
+    function showStep2Error(msg) {
+      // Show in step2 banner (used during payment submission)
+      console.error('[ORDER] Error:', msg);  // always log to console too
+      var b2 = document.getElementById('errorBannerStep2');
+      b2.textContent = msg;
+      b2.classList.remove('hidden');
+      // Do NOT auto-hide step2 errors — user needs to read them
+    }
+
+    function clearStep2Error() {
+      var b2 = document.getElementById('errorBannerStep2');
+      b2.classList.add('hidden');
+      b2.textContent = '';
+    }
+
+    function goToStep(step) {
+      if (step === 2) {
+        var name    = document.getElementById('clientName').value.trim();
+        var email   = document.getElementById('clientEmail').value.trim();
+        var service = document.getElementById('serviceType').value;
+        if (name.length < 2)      { showError('Please enter your full name.');        return; }
+        if (!email.includes('@')) { showError('Please enter a valid email address.'); return; }
+        if (!service)             { showError('Please select a service type.');        return; }
+        document.getElementById('summaryService').textContent = SERVICE_LABELS[service] || service;
+      }
+
+      document.getElementById('step1').classList.toggle('hidden', step !== 1);
+      document.getElementById('step2').classList.toggle('hidden', step !== 2);
+
+      ['step1-indicator', 'step2-indicator', 'step3-indicator'].forEach(function(id, idx) {
+        document.getElementById(id).classList.toggle('active', idx < step);
+      });
+
+      // Only clear step1 banner when navigating — never touch step2 banner here
+      document.getElementById('errorBannerStep1').classList.add('hidden');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function submitOrder() {
+      clearStep2Error();
+
+      var requirements = document.getElementById('requirements').value.trim();
+      if (requirements.length < 20) {
+        showStep2Error('Please describe your requirements in at least 20 characters.');
+        return;
+      }
+
+      document.getElementById('step3-indicator').classList.add('active');
+      setLoading(true);
+
+      var payload = {
+        client_name:  document.getElementById('clientName').value.trim(),
+        client_email: document.getElementById('clientEmail').value.trim(),
+        service_type: document.getElementById('serviceType').value,
+        requirements: requirements,
+        budget:       document.getElementById('budget').value,
+      };
+
+      console.log('[ORDER] Submitting order:', payload.client_email, payload.service_type);
+
+      try {
+        var res = await fetch('/api/create-order', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(payload),
+        });
+
+        // Always parse the response body first
+        var data;
+        try {
+          data = await res.json();
+        } catch (parseErr) {
+          console.error('[ORDER] Could not parse server response:', parseErr);
+          showStep2Error('Server error. Please check your terminal and try again.');
+          setLoading(false);
+          document.getElementById('step3-indicator').classList.remove('active');
+          return;
+        }
+
+        console.log('[ORDER] Server response:', res.status, data);
+
+        if (res.status === 503) {
+          // Stripe or DB not configured
+          showStep2Error(
+            (data.error || 'Server not configured.') +
+            ' — Please check that STRIPE_SECRET_KEY and STRIPE_SERVICE_PRICE_ID are set in your .env file.'
+          );
+          setLoading(false);
+          document.getElementById('step3-indicator').classList.remove('active');
+          return;
+        }
+
+        if (res.status === 400) {
+          // Validation error
+          showStep2Error(data.error || 'Please check your details and try again.');
+          setLoading(false);
+          document.getElementById('step3-indicator').classList.remove('active');
+          return;
+        }
+
+        if (!res.ok) {
+          // Any other server error
+          showStep2Error(data.error || 'Something went wrong (status ' + res.status + '). Please try again.');
+          setLoading(false);
+          document.getElementById('step3-indicator').classList.remove('active');
+          return;
+        }
+
+        if (!data.url) {
+          showStep2Error('No checkout URL received from server. Check server logs.');
+          setLoading(false);
+          document.getElementById('step3-indicator').classList.remove('active');
+          return;
+        }
+
+        // Success — redirect to Stripe Checkout
+        console.log('[ORDER] Redirecting to Stripe:', data.url);
+        window.location.href = data.url;
+
+      } catch (err) {
+        // Network error — server not running
+        console.error('[ORDER] Network error:', err);
+        showStep2Error('Cannot reach the server. Make sure python server.py is running.');
+        setLoading(false);
+        document.getElementById('step3-indicator').classList.remove('active');
+      }
+    }
+
+    function setLoading(on) {
+      document.getElementById('submitBtnText').classList.toggle('hidden', on);
+      document.getElementById('submitSpinner').classList.toggle('hidden', !on);
+      document.getElementById('submitBtn').disabled = on;
+    }
+  </script>
+</body>
+</html>

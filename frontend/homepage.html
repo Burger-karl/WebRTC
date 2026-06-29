@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — Unlimited Video Calls, Free Forever</title>
+  <meta name="description" content="Professional video conferencing with no time limits, no downloads, and no credit card required. Built on WebRTC."/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d0f1a;
+      --bg2:       #111320;
+      --surface:   #161929;
+      --surface2:  #1c2035;
+      --accent:    #e94560;
+      --accent2:   #533483;
+      --violet:    #7c3aed;
+      --violet2:   #a78bfa;
+      --green:     #10b981;
+      --text:      #f0f1f8;
+      --text-muted:#8892aa;
+      --border:    rgba(255,255,255,0.07);
+      --border2:   rgba(255,255,255,0.12);
+    }
+
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', -apple-system, sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Noise texture overlay ── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none; z-index: 0; opacity: 0.4;
+    }
+
+    /* ── Gradient mesh background ── */
+    .bg-mesh {
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      overflow: hidden;
+    }
+    .bg-mesh::before {
+      content: '';
+      position: absolute;
+      /* FIX: GPU layer promotion prevents layout repaint on every animation frame */
+      will-change: transform;
+      transform: translateZ(0);
+      width: 800px; height: 800px;
+      top: -200px; left: -200px;
+      background: radial-gradient(ellipse, rgba(83,52,131,0.18) 0%, transparent 70%);
+      animation: drift1 18s ease-in-out infinite alternate;
+    }
+    .bg-mesh::after {
+      content: '';
+      position: absolute;
+      /* FIX: GPU layer promotion */
+      will-change: transform;
+      transform: translateZ(0);
+      width: 600px; height: 600px;
+      bottom: -100px; right: -100px;
+      background: radial-gradient(ellipse, rgba(233,69,96,0.12) 0%, transparent 70%);
+      animation: drift2 22s ease-in-out infinite alternate;
+    }
+    .bg-orb {
+      position: absolute;
+      width: 400px; height: 400px;
+      top: 40%; left: 60%;
+      background: radial-gradient(ellipse, rgba(124,58,237,0.1) 0%, transparent 70%);
+      animation: drift3 16s ease-in-out infinite alternate;
+    }
+    @keyframes drift1 { from { transform: translate(0,0) scale(1); }   to { transform: translate(60px, 40px) scale(1.1); } }
+    @keyframes drift2 { from { transform: translate(0,0) scale(1); }   to { transform: translate(-50px,-30px) scale(1.15); } }
+    @keyframes drift3 { from { transform: translate(0,0) scale(1); }   to { transform: translate(-40px, 60px) scale(0.9); } }
+
+    /* ── Layout ── */
+    .page-wrap { position: relative; z-index: 1; }
+
+    /* ── Nav ── */
+    nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1.25rem 2.5rem;
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(12px);
+      background: rgba(13,15,26,0.7);
+      position: sticky; top: 0; z-index: 100;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      font-family: 'Syne', sans-serif;
+      font-size: 1.4rem; font-weight: 800;
+      letter-spacing: -0.5px; color: var(--text);
+      text-decoration: none;
+    }
+    .nav-logo-icon { font-size: 1.5rem; }
+    .nav-links {
+      display: flex; align-items: center; gap: 2rem;
+      list-style: none;
+    }
+    .nav-links a {
+      color: var(--text-muted); font-size: 0.9rem; text-decoration: none;
+      font-weight: 500; transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-cta {
+      display: flex; align-items: center; gap: 0.75rem;
+    }
+    .btn-ghost {
+      padding: 0.55rem 1.25rem; border-radius: 8px;
+      border: 1px solid var(--border2); background: transparent;
+      color: var(--text); font-size: 0.875rem; font-weight: 600;
+      cursor: pointer; text-decoration: none; transition: all 0.2s;
+      font-family: 'DM Sans', sans-serif;
+    }
+    .btn-ghost:hover { background: var(--surface2); border-color: var(--border2); }
+    .btn-primary {
+      padding: 0.6rem 1.4rem; border-radius: 8px;
+      background: var(--violet); border: none;
+      color: #fff; font-size: 0.875rem; font-weight: 700;
+      cursor: pointer; text-decoration: none; transition: all 0.2s;
+      font-family: 'DM Sans', sans-serif;
+    }
+    .btn-primary:hover { background: #6d28d9; transform: translateY(-1px); }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 6rem 2rem 5rem;
+      text-align: center;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 0.4rem 1rem; border-radius: 999px;
+      background: rgba(124,58,237,0.15);
+      border: 1px solid rgba(124,58,237,0.3);
+      font-size: 0.78rem; font-weight: 600; color: var(--violet2);
+      margin-bottom: 2rem;
+      animation: fadeUp 0.6s ease both;
+    }
+    .badge-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse-dot 2s ease infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.6; transform: scale(1.4); }
+    }
+
+    .hero h1 {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(2.8rem, 6vw, 5rem);
+      font-weight: 800; line-height: 1.08;
+      letter-spacing: -2px;
+      margin-bottom: 1.5rem;
+      animation: fadeUp 0.6s 0.1s ease both;
+    }
+    .hero h1 .line-accent {
+      background: linear-gradient(135deg, var(--violet2) 0%, var(--accent) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-sub {
+      font-size: 1.15rem; color: var(--text-muted); line-height: 1.7;
+      max-width: 560px; margin: 0 auto 2.5rem;
+      font-weight: 300;
+      animation: fadeUp 0.6s 0.2s ease both;
+    }
+
+    .hero-actions {
+      display: flex; align-items: center; justify-content: center;
+      gap: 1rem; flex-wrap: wrap; margin-bottom: 3rem;
+      animation: fadeUp 0.6s 0.3s ease both;
+    }
+    .btn-hero-primary {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 1rem 2rem; border-radius: 12px;
+      background: linear-gradient(135deg, var(--violet) 0%, var(--accent2) 100%);
+      color: #fff; font-size: 1rem; font-weight: 700;
+      text-decoration: none; border: none; cursor: pointer;
+      font-family: 'DM Sans', sans-serif;
+      transition: all 0.25s;
+      box-shadow: 0 8px 32px rgba(124,58,237,0.35);
+    }
+    .btn-hero-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 40px rgba(124,58,237,0.5);
+    }
+    .btn-hero-primary:active { transform: translateY(0); }
+    .btn-arrow { font-size: 1.1rem; transition: transform 0.2s; }
+    .btn-hero-primary:hover .btn-arrow { transform: translateX(3px); }
+
+    .btn-hero-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 1rem 1.75rem; border-radius: 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      color: var(--text); font-size: 1rem; font-weight: 600;
+      text-decoration: none; cursor: pointer;
+      font-family: 'DM Sans', sans-serif;
+      transition: all 0.2s;
+    }
+    .btn-hero-secondary:hover { background: var(--surface); border-color: var(--violet2); }
+
+    .hero-note {
+      font-size: 0.8rem; color: var(--text-muted);
+      animation: fadeUp 0.6s 0.4s ease both;
+    }
+    .hero-note span { color: var(--green); font-weight: 600; }
+
+    /* ── Social proof strip ── */
+    .social-strip {
+      display: flex; align-items: center; justify-content: center; gap: 2.5rem;
+      padding: 1.5rem 2rem;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      animation: fadeUp 0.6s 0.5s ease both;
+    }
+    .social-item {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 0.85rem; color: var(--text-muted);
+    }
+    .social-item strong { color: var(--text); }
+    .social-sep { width: 1px; height: 20px; background: var(--border2); }
+
+    /* ── Preview window ── */
+    .preview-section {
+      padding: 4rem 2rem;
+      max-width: 1100px; margin: 0 auto;
+    }
+    .preview-window {
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 40px 100px rgba(0,0,0,0.5), 0 0 0 1px var(--border);
+      position: relative;
+      animation: fadeUp 0.8s 0.3s ease both;
+    }
+    .preview-titlebar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 0.75rem 1.25rem;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+    }
+    .titlebar-dot {
+      width: 12px; height: 12px; border-radius: 50%;
+    }
+    .dot-red   { background: #ff5f57; }
+    .dot-yellow{ background: #febc2e; }
+    .dot-green { background: #28c840; }
+    .titlebar-url {
+      flex: 1; text-align: center; font-size: 0.78rem;
+      color: var(--text-muted); font-family: monospace;
+    }
+
+    /* Fake video grid inside preview */
+    .preview-body {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px; padding: 12px;
+      background: #0a0c15; min-height: 320px;
+    }
+    .preview-tile {
+      border-radius: 10px; aspect-ratio: 16/9;
+      position: relative; overflow: hidden;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+    }
+    .preview-tile-inner {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .preview-avatar {
+      width: 48px; height: 48px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem; font-weight: 700;
+      flex-shrink: 0;
+    }
+    .av-a { background: linear-gradient(135deg, #7c3aed, #a78bfa); }
+    .av-b { background: linear-gradient(135deg, #e94560, #f97316); }
+    .av-c { background: linear-gradient(135deg, #10b981, #06b6d4); }
+    .av-d { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+    .av-e { background: linear-gradient(135deg, #8b5cf6, #ec4899); }
+    .av-f { background: linear-gradient(135deg, #14b8a6, #6366f1); }
+
+    .preview-name {
+      position: absolute; bottom: 8px; left: 10px;
+      background: rgba(0,0,0,0.65); backdrop-filter: blur(4px);
+      padding: 2px 8px; border-radius: 999px;
+      font-size: 0.7rem; font-weight: 600;
+    }
+    .preview-muted {
+      position: absolute; top: 8px; right: 8px;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: rgba(233,69,96,0.85);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.6rem;
+    }
+    .preview-speaking { border: 2px solid var(--violet2); }
+
+    .preview-controlbar {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      padding: 0.75rem;
+      background: rgba(10,12,21,0.95);
+      border-top: 1px solid var(--border);
+    }
+    .preview-btn {
+      width: 38px; height: 38px; border-radius: 50%;
+      background: var(--surface2); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem;
+    }
+    .preview-btn.danger { background: rgba(233,69,96,0.25); border-color: var(--accent); }
+    .preview-btn.active { background: rgba(124,58,237,0.25); border-color: var(--violet2); }
+
+    /* ── Features grid ── */
+    .features-section {
+      padding: 5rem 2rem;
+      max-width: 1100px; margin: 0 auto;
+    }
+    .section-label {
+      font-size: 0.78rem; font-weight: 700; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--violet2);
+      margin-bottom: 1rem;
+    }
+    .section-title {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+      font-weight: 800; letter-spacing: -1px;
+      line-height: 1.1; margin-bottom: 1rem;
+    }
+    .section-sub {
+      color: var(--text-muted); font-size: 1rem;
+      line-height: 1.7; max-width: 500px;
+    }
+
+    .features-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1px; margin-top: 3.5rem;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 16px; overflow: hidden;
+    }
+    .feature-card {
+      background: var(--bg2); padding: 2rem;
+      transition: background 0.2s;
+      position: relative; overflow: hidden;
+    }
+    .feature-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, var(--violet), var(--accent));
+      opacity: 0; transition: opacity 0.3s;
+    }
+    .feature-card:hover { background: var(--surface); }
+    .feature-card:hover::before { opacity: 1; }
+
+    .feature-icon {
+      width: 44px; height: 44px; border-radius: 10px;
+      background: var(--surface2); border: 1px solid var(--border2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.2rem; margin-bottom: 1.1rem;
+    }
+    .feature-title {
+      font-family: 'Syne', sans-serif;
+      font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem;
+    }
+    .feature-desc {
+      font-size: 0.875rem; color: var(--text-muted); line-height: 1.6;
+    }
+
+    /* ── Stats ── */
+    .stats-section {
+      padding: 4rem 2rem;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .stats-inner {
+      max-width: 900px; margin: 0 auto;
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 2rem; text-align: center;
+    }
+    .stat-item {}
+    .stat-num {
+      font-family: 'Syne', sans-serif;
+      font-size: 3rem; font-weight: 800;
+      background: linear-gradient(135deg, var(--violet2), var(--text));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+      line-height: 1;
+    }
+    .stat-label {
+      font-size: 0.875rem; color: var(--text-muted); margin-top: 0.4rem;
+    }
+
+    /* ── Pricing Section ── */
+    .pricing-section {
+      padding: 6rem 2rem;
+      max-width: 1000px; margin: 0 auto;
+      text-align: center;
+    }
+    .pricing-toggle-row {
+      display: flex; align-items: center; justify-content: center;
+      gap: 12px; margin: 2rem 0;
+    }
+    .toggle-label { font-size: 0.95rem; color: var(--text-muted); font-weight: 500; }
+    .toggle-label.on { color: var(--text); font-weight: 600; }
+    .save-pill {
+      display: inline-block;
+      background: rgba(16,185,129,0.2); color: var(--green);
+      border: 1px solid rgba(16,185,129,0.3);
+      font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em;
+      padding: 2px 8px; border-radius: 999px; margin-left: 4px;
+    }
+    .toggle-switch {
+      position: relative; display: inline-block;
+      width: 48px; height: 26px; cursor: pointer;
+    }
+    .toggle-switch input { display: none; }
+    .toggle-track {
+      position: absolute; inset: 0; border-radius: 26px;
+      background: var(--surface2); border: 1px solid var(--border2);
+      transition: background 0.2s;
+    }
+    .toggle-thumb {
+      position: absolute; top: 3px; left: 3px;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--text-muted); transition: all 0.2s;
+    }
+    input:checked ~ .toggle-track { background: var(--violet); }
+    input:checked ~ .toggle-thumb { transform: translateX(22px); background: #fff; }
+
+    .plans-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.5rem; margin-top: 2.5rem; align-items: start;
+    }
+    .plan-card {
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 20px; padding: 2rem;
+      text-align: left; position: relative;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .plan-card:hover { transform: translateY(-3px); }
+    .plan-card.featured {
+      border-color: var(--violet);
+      background: linear-gradient(160deg, rgba(124,58,237,0.08) 0%, var(--surface) 60%);
+      box-shadow: 0 0 0 1px rgba(124,58,237,0.3), 0 20px 60px rgba(124,58,237,0.15);
+    }
+    .plan-badge-top {
+      position: absolute; top: -13px; left: 50%; transform: translateX(-50%);
+      background: linear-gradient(135deg, var(--violet), var(--accent2));
+      color: #fff; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; padding: 4px 14px; border-radius: 999px;
+      white-space: nowrap;
+    }
+    .plan-name {
+      font-size: 0.82rem; font-weight: 700; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--text-muted); margin-bottom: 1rem;
+    }
+    .plan-price-row { display: flex; align-items: flex-end; gap: 4px; margin-bottom: 1.5rem; }
+    .plan-amount {
+      font-family: 'Syne', sans-serif;
+      font-size: 3rem; font-weight: 800; line-height: 1; color: var(--text);
+    }
+    .plan-period { font-size: 0.9rem; color: var(--text-muted); margin-bottom: 6px; }
+    .plan-desc { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.5rem; line-height: 1.5; }
+
+    .plan-features-list { list-style: none; display: flex; flex-direction: column; gap: 10px; margin-bottom: 1.75rem; }
+    .plan-features-list li {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 0.875rem; color: var(--text-muted);
+    }
+    .check { color: var(--green); font-size: 0.9rem; flex-shrink: 0; }
+    .cross { color: var(--text-muted); opacity: 0.4; font-size: 0.9rem; flex-shrink: 0; }
+    .feat-highlight { color: var(--text); font-weight: 500; }
+
+    .plan-action-btn {
+      display: block; width: 100%; padding: 0.85rem;
+      border-radius: 10px; border: none;
+      font-size: 0.95rem; font-weight: 700;
+      cursor: pointer; text-align: center;
+      text-decoration: none;
+      font-family: 'DM Sans', sans-serif;
+      transition: all 0.2s;
+    }
+    .plan-action-btn.secondary {
+      background: var(--surface2); border: 1px solid var(--border2); color: var(--text);
+    }
+    .plan-action-btn.secondary:hover { background: var(--bg2); }
+    .plan-action-btn.primary {
+      background: linear-gradient(135deg, var(--violet), var(--accent2));
+      color: #fff;
+      box-shadow: 0 6px 20px rgba(124,58,237,0.3);
+    }
+    .plan-action-btn.primary:hover { box-shadow: 0 8px 28px rgba(124,58,237,0.45); transform: translateY(-1px); }
+
+    /* Email input on pro plan */
+    .plan-email-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 0; }
+    .plan-email-group input {
+      width: 100%; padding: 0.75rem 1rem; border-radius: 8px;
+      border: 1px solid var(--border2); background: var(--bg);
+      color: var(--text); font-size: 0.9rem; outline: none;
+      font-family: 'DM Sans', sans-serif;
+      transition: border-color 0.2s;
+    }
+    .plan-email-group input:focus { border-color: var(--violet); }
+
+    .pricing-note {
+      margin-top: 2rem; font-size: 0.82rem; color: var(--text-muted);
+    }
+
+    /* Error for checkout */
+    #checkoutError {
+      background: rgba(233,69,96,0.15); border: 1px solid rgba(233,69,96,0.3);
+      color: #ff8fa3; padding: 10px 16px; border-radius: 8px;
+      font-size: 0.85rem; margin-top: 0.5rem;
+    }
+    #checkoutError.hidden { display: none; }
+
+    /* ── CTA Section ── */
+    .cta-section {
+      padding: 6rem 2rem;
+      text-align: center;
+    }
+    .cta-inner {
+      max-width: 680px; margin: 0 auto;
+      background: linear-gradient(160deg, rgba(124,58,237,0.12) 0%, rgba(83,52,131,0.08) 100%);
+      border: 1px solid rgba(124,58,237,0.25);
+      border-radius: 24px; padding: 4rem 3rem;
+      position: relative; overflow: hidden;
+    }
+    .cta-inner::before {
+      content: '';
+      position: absolute; top: -80px; left: 50%;
+      transform: translateX(-50%);
+      width: 400px; height: 200px;
+      background: radial-gradient(ellipse, rgba(124,58,237,0.3) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .cta-inner h2 {
+      font-family: 'Syne', sans-serif;
+      font-size: clamp(1.8rem, 3vw, 2.5rem);
+      font-weight: 800; letter-spacing: -1px;
+      line-height: 1.1; margin-bottom: 1rem;
+    }
+    .cta-inner p {
+      color: var(--text-muted); font-size: 1rem;
+      line-height: 1.6; margin-bottom: 2rem;
+    }
+
+    /* ── Footer ── */
+    footer {
+      padding: 2.5rem;
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 1rem;
+      font-size: 0.82rem; color: var(--text-muted);
+    }
+    .footer-logo {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700; color: var(--text-muted);
+      text-decoration: none;
+    }
+    .footer-links { display: flex; gap: 1.5rem; }
+    .footer-links a { color: var(--text-muted); text-decoration: none; transition: color 0.2s; }
+    .footer-links a:hover { color: var(--text); }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block; width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff; border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+
+    /* ── Animations ── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in-section {
+      opacity: 0; transform: translateY(30px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+    .fade-in-section.visible {
+      opacity: 1; transform: translateY(0);
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      nav { padding: 1rem 1.25rem; }
+      .nav-links { display: none; }
+      .hero { padding: 4rem 1.25rem 3rem; }
+      .hero-actions { flex-direction: column; align-items: stretch; }
+      .btn-hero-primary, .btn-hero-secondary { text-align: center; justify-content: center; }
+      .preview-body { grid-template-columns: 1fr 1fr; }
+      .cta-inner { padding: 2.5rem 1.5rem; }
+      footer { flex-direction: column; align-items: center; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="bg-mesh"><div class="bg-orb"></div></div>
+
+<div class="page-wrap">
+
+  <!-- ── Nav ── -->
+  <nav>
+    <a href="/" class="nav-logo">
+      <span class="nav-logo-icon">📹</span>
+      MeetFree
+    </a>
+    <ul class="nav-links">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#pricing">Pricing</a></li>
+      <li><a href="/order">Services</a></li>
+      <li><a href="/dashboard">Dashboard</a></li>
+    </ul>
+    <div class="nav-cta">
+      <a href="/join" class="btn-ghost">Sign In</a>
+      <a href="/join" class="btn-primary">Start Free →</a>
+    </div>
+  </nav>
+
+  <!-- ── Hero ── -->
+  <section class="hero">
+    <div class="hero-badge">
+      <div class="badge-dot"></div>
+      WebRTC-powered · No downloads required · Self-hosted
+    </div>
+
+    <h1>
+      Video calls that<br>
+      <span class="line-accent">never cut out.</span>
+    </h1>
+
+    <p class="hero-sub">
+      Peer-to-peer video conferencing with no time limits, no participant caps,
+      and no subscription required to start. Just open a room and go.
+    </p>
+
+    <div class="hero-actions">
+      <a href="/join" class="btn-hero-primary">
+        📹 Start a Video Call
+        <span class="btn-arrow">→</span>
+      </a>
+      <a href="#pricing" class="btn-hero-secondary">
+        See Pricing
+      </a>
+    </div>
+
+    <p class="hero-note">
+      <span>✓ Free 14-day trial</span> &nbsp;·&nbsp;
+      No credit card required &nbsp;·&nbsp;
+      Up to 100 participants
+    </p>
+  </section>
+
+  <!-- ── Social proof ── -->
+  <div class="social-strip fade-in-section">
+    <div class="social-item">🔒 <strong>JWT-secured</strong> rooms</div>
+    <div class="social-sep"></div>
+    <div class="social-item">👥 Up to <strong>100</strong> participants</div>
+    <div class="social-sep"></div>
+    <div class="social-item">🗝️ <strong>Password</strong>-protected rooms</div>
+    <div class="social-sep"></div>
+    <div class="social-item">💬 <strong>Persistent</strong> chat history</div>
+    <div class="social-sep"></div>
+    <div class="social-item">⚡ <strong>Zero</strong> download for guests</div>
+  </div>
+
+  <!-- ── App Preview ── -->
+  <section class="preview-section fade-in-section">
+    <div class="preview-window">
+      <div class="preview-titlebar">
+        <div class="titlebar-dot dot-red"></div>
+        <div class="titlebar-dot dot-yellow"></div>
+        <div class="titlebar-dot dot-green"></div>
+        <div class="titlebar-url">meetfree.app/room/team-standup</div>
+      </div>
+      <div class="preview-body">
+        <div class="preview-tile preview-speaking">
+          <div class="preview-tile-inner">
+            <div class="preview-avatar av-a">A</div>
+          </div>
+          <div class="preview-name">Alice (You)</div>
+        </div>
+        <div class="preview-tile">
+          <div class="preview-tile-inner">
+            <div class="preview-avatar av-b">B</div>
+          </div>
+          <div class="preview-name">Bob</div>
+          <div class="preview-muted">🎤</div>
+        </div>
+        <div class="preview-tile">
+          <div class="preview-tile-inner">
+            <div class="preview-avatar av-c">C</div>
+          </div>
+          <div class="preview-name">Carol</div>
+        </div>
+        <div class="preview-tile">
+          <div class="preview-tile-inner">
+            <div class="preview-avatar av-d">D</div>
+          </div>
+          <div class="preview-name">Dan</div>
+        </div>
+        <div class="preview-tile">
+          <div class="preview-tile-inner">
+            <div class="preview-avatar av-e">E</div>
+          </div>
+          <div class="preview-name">Emma</div>
+        </div>
+        <div class="preview-tile">
+          <div class="preview-tile-inner">
+            <div class="preview-avatar av-f">F</div>
+          </div>
+          <div class="preview-name">Frank</div>
+        </div>
+      </div>
+      <div class="preview-controlbar">
+        <div class="preview-btn">🎤</div>
+        <div class="preview-btn">📷</div>
+        <div class="preview-btn active">🖥️</div>
+        <div class="preview-btn">💬</div>
+        <div class="preview-btn">✋</div>
+        <div class="preview-btn danger">📵</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Features ── -->
+  <section class="features-section fade-in-section" id="features">
+    <div class="section-label">Why MeetFree</div>
+    <h2 class="section-title">Everything you need.<br>Nothing you don't.</h2>
+    <p class="section-sub">
+      Built on WebRTC for direct peer-to-peer connections. Your calls never
+      touch a media server — just direct, encrypted video between participants.
+    </p>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <div class="feature-title">Instant Rooms</div>
+        <div class="feature-desc">Create or join a room in one click. No account needed for guests. Share a link and you're live.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔒</div>
+        <div class="feature-title">JWT-Secured Access</div>
+        <div class="feature-desc">Every participant gets a signed token. Password-protected rooms add an extra layer of control.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">👑</div>
+        <div class="feature-title">Host Controls</div>
+        <div class="feature-desc">Mute, remove, or admit participants from a waiting lobby. You control who's in your room.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">💬</div>
+        <div class="feature-title">Persistent Chat</div>
+        <div class="feature-desc">Chat history is saved and reloaded when you return to the room. Nothing gets lost.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🖥️</div>
+        <div class="feature-title">Screen Sharing</div>
+        <div class="feature-desc">Share your entire screen, a window, or a browser tab. Works across all modern browsers.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🌐</div>
+        <div class="feature-title">TURN Relay</div>
+        <div class="feature-desc">Pro plan includes TURN relay support for participants behind strict corporate firewalls.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Stats ── -->
+  <section class="stats-section fade-in-section">
+    <div class="stats-inner">
+      <div class="stat-item">
+        <div class="stat-num">100</div>
+        <div class="stat-label">Max participants per room</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">0ms</div>
+        <div class="stat-label">Media server latency (P2P)</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">14</div>
+        <div class="stat-label">Day free trial, no card</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">∞</div>
+        <div class="stat-label">Meeting duration, always</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Pricing ── -->
+  <section class="pricing-section fade-in-section" id="pricing">
+    <div class="section-label">Pricing</div>
+    <h2 class="section-title">Simple, transparent pricing</h2>
+    <p class="section-sub" style="margin:0 auto">
+      Start free. Upgrade when you need TURN relay or priority support.
+      No hidden fees. Cancel anytime.
+    </p>
+
+    <!-- Billing toggle -->
+    <div class="pricing-toggle-row">
+      <span class="toggle-label on" id="lbl-monthly">Monthly</span>
+      <label class="toggle-switch">
+        <input type="checkbox" id="billingToggle" onchange="switchBilling()"/>
+        <div class="toggle-track"></div>
+        <div class="toggle-thumb"></div>
+      </label>
+      <span class="toggle-label" id="lbl-yearly">
+        Yearly <span class="save-pill">SAVE 31%</span>
+      </span>
+    </div>
+
+    <div class="plans-grid">
+
+      <!-- Free Trial -->
+      <div class="plan-card">
+        <div class="plan-name">Free Trial</div>
+        <div class="plan-price-row">
+          <div class="plan-amount">$0</div>
+          <div class="plan-period">&nbsp;/ 14 days</div>
+        </div>
+        <div class="plan-desc">Everything you need to try MeetFree. No card required.</div>
+        <ul class="plan-features-list">
+          <li><span class="check">✓</span> <span class="feat-highlight">Unlimited meeting time</span></li>
+          <li><span class="check">✓</span> Up to 100 participants</li>
+          <li><span class="check">✓</span> Screen sharing</li>
+          <li><span class="check">✓</span> In-room chat + history</li>
+          <li><span class="check">✓</span> Lobby / waiting room</li>
+          <li><span class="cross">✗</span> TURN relay</li>
+          <li><span class="cross">✗</span> Priority support</li>
+        </ul>
+        <a href="/join" class="plan-action-btn secondary">Start Free Trial →</a>
+      </div>
+
+      <!-- Pro -->
+      <div class="plan-card featured">
+        <div class="plan-badge-top">Most Popular</div>
+        <div class="plan-name">Pro</div>
+        <div class="plan-price-row">
+          <div class="plan-amount" id="pro-amount">$12</div>
+          <div class="plan-period" id="pro-period">&nbsp;/ month</div>
+        </div>
+        <div class="plan-desc">For teams and professionals who need reliability.</div>
+        <ul class="plan-features-list">
+          <li><span class="check">✓</span> <span class="feat-highlight">Everything in Free</span></li>
+          <li><span class="check">✓</span> Unlimited rooms</li>
+          <li><span class="check">✓</span> Custom room URLs</li>
+          <li><span class="check">✓</span> <span class="feat-highlight">TURN relay (corporate networks)</span></li>
+          <li><span class="check">✓</span> Priority support</li>
+          <li><span class="check">✓</span> Recording (coming soon)</li>
+        </ul>
+
+        <div class="plan-email-group">
+          <input type="email" id="proEmail" placeholder="your@email.com" autocomplete="email"/>
+          <div id="checkoutError" class="hidden"></div>
+          <button class="plan-action-btn primary" id="proBtn" onclick="startProCheckout()">
+            <span id="proBtnText">Subscribe Now →</span>
+            <span id="proBtnSpinner" class="spinner hidden"></span>
+          </button>
+        </div>
+        <p style="font-size:0.75rem;color:var(--text-muted);text-align:center;margin-top:0.75rem">
+          🔒 Powered by Stripe · Cancel anytime
+        </p>
+      </div>
+
+      <!-- Service Order -->
+      <div class="plan-card">
+        <div class="plan-name">Custom Build</div>
+        <div class="plan-price-row">
+          <div class="plan-amount">$50</div>
+          <div class="plan-period">&nbsp;+ / project</div>
+        </div>
+        <div class="plan-desc">Need something built? Book a consultation or development session.</div>
+        <ul class="plan-features-list">
+          <li><span class="check">✓</span> Web app development</li>
+          <li><span class="check">✓</span> Mobile app development</li>
+          <li><span class="check">✓</span> API / backend build</li>
+          <li><span class="check">✓</span> UI/UX design</li>
+          <li><span class="check">✓</span> Code review & audit</li>
+          <li><span class="check">✓</span> Dedicated meeting room</li>
+        </ul>
+        <a href="/order" class="plan-action-btn secondary">Book a Session →</a>
+      </div>
+
+    </div>
+
+    <p class="pricing-note">
+      All prices in USD. Subscriptions managed securely via Stripe.
+      <a href="/order" style="color:var(--violet2);text-decoration:none">Need a custom quote?</a>
+    </p>
+  </section>
+
+  <!-- ── CTA ── -->
+  <section class="cta-section fade-in-section">
+    <div class="cta-inner">
+      <h2>Ready to start your<br>first meeting?</h2>
+      <p>
+        No downloads. No account required for guests. Just create a room,
+        share the link, and you're live in under 10 seconds.
+      </p>
+      <div style="display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;">
+        <a href="/join" class="btn-hero-primary" style="font-size:0.95rem;padding:0.85rem 1.75rem;">
+          📹 Start a Free Call
+          <span class="btn-arrow">→</span>
+        </a>
+        <a href="#pricing" class="btn-hero-secondary" style="font-size:0.95rem;padding:0.85rem 1.5rem;">
+          View Pricing
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Footer ── -->
+  <footer>
+    <a href="/" class="footer-logo">📹 MeetFree</a>
+    <div class="footer-links">
+      <a href="/join">Start a Call</a>
+      <a href="#pricing">Pricing</a>
+      <a href="/order">Services</a>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/admin">Admin</a>
+    </div>
+    <div>© <span id="footerYear"></span> MeetFree. All rights reserved.<script>document.getElementById("footerYear").textContent=new Date().getFullYear();</script></div>
+  </footer>
+
+</div><!-- /page-wrap -->
+
+<script>
+  // Injected by Jinja2 from Flask
+  var PRICE_MONTHLY = "{{ price_monthly | default('') }}";
+  var PRICE_YEARLY  = "{{ price_yearly  | default('') }}";
+
+  var currentPlan = 'monthly';
+
+  // ── Billing toggle ─────────────────────────────────────────────────────────
+  function switchBilling() {
+    var yearly = document.getElementById('billingToggle').checked;
+    currentPlan = yearly ? 'yearly' : 'monthly';
+
+    document.getElementById('lbl-monthly').classList.toggle('on', !yearly);
+    document.getElementById('lbl-yearly').classList.toggle('on', yearly);
+    document.getElementById('pro-amount').textContent = yearly ? '$99' : '$12';
+    document.getElementById('pro-period').textContent = yearly ? '\u00a0/ year' : '\u00a0/ month';
+  }
+
+  // ── Pro checkout ───────────────────────────────────────────────────────────
+  function startProCheckout() {
+    var email = document.getElementById('proEmail').value.trim();
+    if (!email || email.indexOf('@') === -1) {
+      showCheckoutError('Please enter a valid email address.');
+      return;
+    }
+
+    var priceOk = (currentPlan === 'monthly')
+      ? (PRICE_MONTHLY && PRICE_MONTHLY.indexOf('price_') === 0)
+      : (PRICE_YEARLY  && PRICE_YEARLY.indexOf('price_')  === 0);
+
+    if (!priceOk) {
+      // FIX: Clear descriptive error instead of silent block when env vars not set
+      showCheckoutError(
+        'Subscription pricing is not yet configured. ' +
+        'Please set STRIPE_PRICE_MONTHLY and STRIPE_PRICE_YEARLY in your .env file, ' +
+        'or contact us to book a custom session.'
+      );
+      return;
+    }
+
+    setProLoading(true);
+    hideCheckoutError();
+
+    fetch('/api/create-checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, plan: currentPlan, trial_period_days: 14 })
+    })
+    .then(function(res) {
+      return res.json().then(function(d) { return { ok: res.ok, data: d }; });
+    })
+    .then(function(r) {
+      if (!r.ok) {
+        var msg = r.data.error || 'Could not start checkout. Please try again.';
+        if (msg.indexOf('price_') !== -1 || msg.indexOf('No such price') !== -1) {
+          msg = 'Stripe price ID is misconfigured. Please contact support.';
+        }
+        showCheckoutError(msg);
+        setProLoading(false);
+        return;
+      }
+      window.location.href = r.data.url;
+    })
+    .catch(function() {
+      showCheckoutError('Network error. Please try again.');
+      setProLoading(false);
+    });
+  }
+
+  document.getElementById('proEmail').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') startProCheckout();
+  });
+
+  function showCheckoutError(msg) {
+    var el = document.getElementById('checkoutError');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  }
+  function hideCheckoutError() {
+    document.getElementById('checkoutError').classList.add('hidden');
+  }
+  function setProLoading(on) {
+    document.getElementById('proBtnText').classList.toggle('hidden', on);
+    document.getElementById('proBtnSpinner').classList.toggle('hidden', !on);
+    document.getElementById('proBtn').disabled = on;
+  }
+
+  // ── Scroll fade-in ─────────────────────────────────────────────────────────
+  var observer = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.12 });
+
+  document.querySelectorAll('.fade-in-section').forEach(function(el) {
+    observer.observe(el);
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MeetFree — Super Admin</title>
+  <link rel="stylesheet" href="/frontend/style.css"/>
+  <style>
+    :root {
+      --admin-bg:      #0f1117;
+      --admin-card:    #1a1d27;
+      --admin-border:  #2a2d3e;
+      --admin-accent:  #6c63ff;
+      --admin-danger:  #ff4d4f;
+      --admin-success: #52c41a;
+      --admin-warning: #faad14;
+      --admin-text:    #e8eaf6;
+      --admin-muted:   #6b7280;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--admin-bg); color: var(--admin-text); font-family: 'Inter', system-ui, sans-serif; min-height: 100vh; }
+
+    #loginScreen { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; }
+    .login-card { background: var(--admin-card); border: 1px solid var(--admin-border); border-radius: 16px; padding: 2.5rem; width: 100%; max-width: 420px; }
+    .login-logo { text-align: center; margin-bottom: 2rem; }
+    .login-logo .badge { display: inline-block; background: var(--admin-accent); color: #fff; font-size: .75rem; font-weight: 700; padding: .25rem .75rem; border-radius: 999px; margin-bottom: .75rem; }
+    .login-logo h1 { font-size: 1.5rem; font-weight: 700; }
+    .login-logo p  { font-size: .875rem; color: var(--admin-muted); margin-top: .25rem; }
+    .form-field { margin-bottom: 1.25rem; }
+    .form-field label { display: block; font-size: .8rem; font-weight: 600; margin-bottom: .4rem; color: var(--admin-muted); text-transform: uppercase; letter-spacing: .04em; }
+    .form-field input { width: 100%; padding: .75rem 1rem; border-radius: 8px; border: 1px solid var(--admin-border); background: var(--admin-bg); color: var(--admin-text); font-size: .95rem; outline: none; transition: border .2s; }
+    .form-field input:focus { border-color: var(--admin-accent); }
+    .btn { display: inline-flex; align-items: center; gap: .5rem; padding: .75rem 1.5rem; border-radius: 8px; border: none; font-size: .9rem; font-weight: 600; cursor: pointer; transition: opacity .2s, transform .1s; }
+    .btn:hover  { opacity: .88; }
+    .btn:active { transform: scale(.98); }
+    .btn-primary { background: var(--admin-accent); color: #fff; width: 100%; justify-content: center; }
+    .btn-danger  { background: var(--admin-danger);  color: #fff; }
+    .btn-ghost   { background: transparent; border: 1px solid var(--admin-border); color: var(--admin-text); }
+    .btn-sm      { padding: .4rem .9rem; font-size: .8rem; }
+    .error-msg   { color: var(--admin-danger); font-size: .85rem; margin-top: .75rem; text-align: center; min-height: 1.2rem; }
+
+    #dashboard { display: none; }
+    .top-bar { display: flex; align-items: center; justify-content: space-between; padding: 1rem 2rem; background: var(--admin-card); border-bottom: 1px solid var(--admin-border); position: sticky; top: 0; z-index: 10; }
+    .top-bar-left { display: flex; align-items: center; gap: .75rem; }
+    .top-badge { background: var(--admin-accent); color: #fff; font-size: .7rem; font-weight: 700; padding: .2rem .6rem; border-radius: 999px; }
+    .top-bar h1 { font-size: 1.1rem; font-weight: 700; }
+    .admin-email { font-size: .8rem; color: var(--admin-muted); }
+    .main-content { padding: 2rem; max-width: 1200px; margin: 0 auto; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+    .stat-card { background: var(--admin-card); border: 1px solid var(--admin-border); border-radius: 12px; padding: 1.25rem 1.5rem; }
+    .stat-card .stat-label { font-size: .78rem; color: var(--admin-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .5rem; }
+    .stat-card .stat-value { font-size: 2rem; font-weight: 700; }
+    .stat-card .stat-sub   { font-size: .78rem; color: var(--admin-muted); margin-top: .25rem; }
+    .stat-accent  { color: var(--admin-accent); }
+    .stat-success { color: var(--admin-success); }
+
+    .section { margin-bottom: 2rem; }
+    .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+    .section-header h2 { font-size: 1rem; font-weight: 600; }
+
+    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem; }
+    .metric-chip { background: var(--admin-card); border: 1px solid var(--admin-border); border-radius: 10px; padding: 1rem; display: flex; flex-direction: column; gap: .25rem; }
+    .metric-chip .m-label { font-size: .75rem; color: var(--admin-muted); }
+    .metric-chip .m-value { font-size: 1.25rem; font-weight: 700; color: var(--admin-accent); }
+    .metric-note { font-size: .75rem; color: var(--admin-muted); margin-top: .5rem; font-style: italic; }
+
+    .room-card { background: var(--admin-card); border: 1px solid var(--admin-border); border-radius: 12px; padding: 1.25rem; margin-bottom: .75rem; }
+    .room-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: .75rem; }
+    .room-id   { font-weight: 700; font-size: .95rem; }
+    .room-meta { font-size: .8rem; color: var(--admin-muted); margin-top: .15rem; }
+    .user-pill { display: inline-flex; align-items: center; gap: .4rem; background: #1e2235; border: 1px solid var(--admin-border); border-radius: 999px; padding: .25rem .75rem; font-size: .78rem; margin: .2rem; }
+    .user-pill.host { border-color: var(--admin-accent); color: var(--admin-accent); }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: .75rem 1rem; border-bottom: 1px solid var(--admin-border); font-size: .875rem; }
+    th { color: var(--admin-muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    .table-wrap { background: var(--admin-card); border: 1px solid var(--admin-border); border-radius: 12px; overflow: hidden; }
+
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); align-items: center; justify-content: center; z-index: 100; }
+    .modal-overlay.open { display: flex; }
+    .modal { background: var(--admin-card); border: 1px solid var(--admin-border); border-radius: 16px; padding: 2rem; width: 100%; max-width: 460px; }
+    .modal h3 { font-size: 1.1rem; margin-bottom: 1.5rem; }
+    .modal-actions { display: flex; gap: .75rem; justify-content: flex-end; margin-top: 1.5rem; }
+
+    .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+    .refresh-hint { font-size: .75rem; color: var(--admin-muted); }
+    .no-data { text-align: center; color: var(--admin-muted); padding: 2rem; }
+    .order-filter-select { background: var(--admin-card); border: 1px solid var(--admin-border); color: var(--admin-text); padding: .35rem .75rem; border-radius: 6px; font-size: .8rem; }
+  </style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="badge">SUPER ADMIN</div>
+      <h1>MeetFree</h1>
+      <p>Global admin access</p>
+    </div>
+    <div class="form-field">
+      <label>Email</label>
+      <input type="email" id="loginEmail" placeholder="admin@example.com" autocomplete="username"/>
+    </div>
+    <div class="form-field">
+      <label>Password</label>
+      <input type="password" id="loginPassword" placeholder="Enter password" autocomplete="current-password"/>
+    </div>
+    <button class="btn btn-primary" id="loginBtn" onclick="doLogin()">
+      <span id="loginBtnText">Sign In</span>
+      <span id="loginSpinner" class="spinner hidden"></span>
+    </button>
+    <div class="error-msg" id="loginError"></div>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dashboard">
+  <div class="top-bar">
+    <div class="top-bar-left">
+      <span class="top-badge">SUPER ADMIN</span>
+      <h1>MeetFree Control Panel</h1>
+    </div>
+    <div style="display:flex;align-items:center;gap:1rem;">
+      <span class="admin-email" id="adminEmail"></span>
+      <button class="btn btn-ghost btn-sm" onclick="refreshAll()">Refresh</button>
+      <button class="btn btn-ghost btn-sm" onclick="doLogout()">Sign Out</button>
+    </div>
+  </div>
+
+  <div class="main-content">
+
+    <!-- Stats -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Active Rooms</div>
+        <div class="stat-value stat-accent" id="statRooms">0</div>
+        <div class="stat-sub">Currently live</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Active Users</div>
+        <div class="stat-value stat-accent" id="statUsers">0</div>
+        <div class="stat-sub">In rooms right now</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Registered</div>
+        <div class="stat-value" id="statRegistered">0</div>
+        <div class="stat-sub">All-time users</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Paid Subscribers</div>
+        <div class="stat-value stat-success" id="statPaid">0</div>
+        <div class="stat-sub">Active subscriptions</div>
+      </div>
+    </div>
+
+    <!-- Server Metrics -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Server Process Metrics</h2>
+        <span class="refresh-hint">Python process only — not the host machine</span>
+      </div>
+      <div class="metrics-grid">
+        <div class="metric-chip"><div class="m-label">CPU Usage</div><div class="m-value" id="mCpu">—</div></div>
+        <div class="metric-chip"><div class="m-label">Memory (RSS)</div><div class="m-value" id="mMem">—</div></div>
+        <div class="metric-chip"><div class="m-label">Threads</div><div class="m-value" id="mThreads">—</div></div>
+        <div class="metric-chip"><div class="m-label">Connections</div><div class="m-value" id="mConns">—</div></div>
+        <div class="metric-chip"><div class="m-label">Uptime</div><div class="m-value" id="mUptime">—</div></div>
+        <div class="metric-chip"><div class="m-label">Process ID</div><div class="m-value" id="mPid">—</div></div>
+      </div>
+      <div class="metric-note" id="metricNote"></div>
+    </div>
+
+    <!-- Active Rooms -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Active Rooms</h2>
+        <span class="refresh-hint" id="roomsUpdated"></span>
+      </div>
+      <div id="roomsList"><div class="no-data">No active rooms</div></div>
+    </div>
+
+    <!-- Orders -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Orders</h2>
+        <div style="display:flex;gap:.5rem;align-items:center;">
+          <select id="orderFilter" onchange="loadOrders()" class="order-filter-select">
+            <option value="">All Orders</option>
+            <option value="paid">Paid</option>
+            <option value="pending">Pending</option>
+            <option value="failed">Failed</option>
+          </select>
+          <span class="refresh-hint" id="ordersUpdated"></span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>Client</th><th>Service</th><th>Status</th>
+              <th>Room ID</th><th>Scheduled</th><th>Created</th>
+            </tr>
+          </thead>
+          <tbody id="ordersBody">
+            <tr><td colspan="7" class="no-data">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Room Admins -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Room Admins</h2>
+        <button class="btn btn-primary btn-sm" onclick="openCreateModal()">+ Add Room Admin</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Email</th><th>Room ID</th><th>Created By</th><th>Created</th><th>Action</th></tr>
+          </thead>
+          <tbody id="roomAdminsBody">
+            <tr><td colspan="5" class="no-data">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Create Room Admin Modal -->
+<div class="modal-overlay" id="createModal">
+  <div class="modal">
+    <h3>Create Room Admin</h3>
+    <div class="form-field">
+      <label>Email</label>
+      <input type="email" id="newEmail" placeholder="roomadmin@example.com"/>
+    </div>
+    <div class="form-field">
+      <label>Password (min 8 chars)</label>
+      <input type="password" id="newPassword" placeholder="Password"/>
+    </div>
+    <div class="form-field">
+      <label>Room ID</label>
+      <input type="text" id="newRoomId" placeholder="my-room-id"/>
+    </div>
+    <div class="error-msg" id="createError"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeCreateModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitCreateRoomAdmin()">Create</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  var _token        = sessionStorage.getItem('sa_token') || '';
+  var _refreshTimer = null;
+
+  // ── Login ──────────────────────────────────────────────────────────────────
+  function doLogin() {
+    var email    = document.getElementById('loginEmail').value.trim();
+    var password = document.getElementById('loginPassword').value;
+    if (!email || !password) { setLoginError('Email and password required.'); return; }
+
+    setLoginLoading(true);
+    setLoginError('');
+
+    fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: password })
+    })
+    .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
+    .then(function(r) {
+      if (!r.ok) { setLoginError(r.data.error || 'Login failed.'); setLoginLoading(false); return; }
+      if (r.data.role !== 'super_admin') { setLoginError('This panel is for Super Admins only.'); setLoginLoading(false); return; }
+      _token = r.data.token;
+      sessionStorage.setItem('sa_token', _token);
+      setLoginLoading(false);
+      showDashboard(email);
+    })
+    .catch(function() { setLoginError('Network error. Is the server running?'); setLoginLoading(false); });
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && document.getElementById('loginScreen').style.display !== 'none') {
+      doLogin();
+    }
+  });
+
+  function doLogout() {
+    sessionStorage.removeItem('sa_token');
+    _token = '';
+    clearInterval(_refreshTimer);
+    document.getElementById('dashboard').style.display    = 'none';
+    document.getElementById('loginScreen').style.display  = 'flex';
+  }
+
+  function setLoginError(msg) { document.getElementById('loginError').textContent = msg; }
+  function setLoginLoading(on) {
+    document.getElementById('loginBtnText').classList.toggle('hidden', on);
+    document.getElementById('loginSpinner').classList.toggle('hidden', !on);
+    document.getElementById('loginBtn').disabled = on;
+  }
+
+  // ── Dashboard ──────────────────────────────────────────────────────────────
+  function showDashboard(email) {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('dashboard').style.display   = 'block';
+    document.getElementById('adminEmail').textContent    = email || '';
+    refreshAll();
+    _refreshTimer = setInterval(refreshAll, 15000);
+  }
+
+  // FIX: Sequential async chain instead of 5 simultaneous fetches every 15s.
+  // Parallel firing saturates the browser connection pool and creates a DoS
+  // profile against admin API endpoints on slow connections.
+  function refreshAll() {
+    loadStats()
+      .then(function() { return loadMetrics(); })
+      .then(function() { return loadRooms();   })
+      .then(function() { return loadOrders();  })
+      .then(function() { return loadRoomAdmins(); })
+      .catch(function(e) { console.error('[refreshAll] chain error', e); });
+  }
+
+  // ── Stats ──────────────────────────────────────────────────────────────────
+  function loadStats() {
+    return apiFetch('/api/admin/stats')
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      document.getElementById('statRooms').textContent      = data.active_rooms      != null ? data.active_rooms      : '0';
+      document.getElementById('statUsers').textContent      = data.active_users      != null ? data.active_users      : '0';
+      document.getElementById('statRegistered').textContent = data.total_registered  != null ? data.total_registered  : '0';
+      document.getElementById('statPaid').textContent       = data.total_paid_subs   != null ? data.total_paid_subs   : '0';
+    })
+    .catch(function(e) { console.error('Stats error', e); });
+  }
+
+  // ── Metrics ────────────────────────────────────────────────────────────────
+  function loadMetrics() {
+    return apiFetch('/api/admin/system')
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      document.getElementById('mCpu').textContent     = data.cpu_percent         != null ? data.cpu_percent.toFixed(1) + '%' : '—';
+      document.getElementById('mMem').textContent     = data.memory_rss_mb       != null ? data.memory_rss_mb + ' MB'        : '—';
+      document.getElementById('mThreads').textContent = data.threads             != null ? data.threads                      : '—';
+      document.getElementById('mConns').textContent   = data.network_connections != null ? data.network_connections          : '—';
+      document.getElementById('mUptime').textContent  = data.uptime_human        != null ? data.uptime_human                 : '—';
+      document.getElementById('mPid').textContent     = data.pid                 != null ? data.pid                          : '—';
+      document.getElementById('metricNote').textContent = data.note || '';
+    })
+    .catch(function(e) { console.error('Metrics error', e); });
+  }
+
+  // ── Active Rooms ───────────────────────────────────────────────────────────
+  // FIX XSS: Uses DOM createElement + data-binding closures instead of
+  // string-interpolated onclick attributes. esc() does not prevent quote-breakout
+  // inside HTML event handler attribute strings.
+  function loadRooms() {
+    return apiFetch('/api/admin/rooms')
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      var el   = document.getElementById('roomsList');
+      var list = data.rooms || [];
+      document.getElementById('roomsUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      el.innerHTML = '';
+
+      if (!list.length) {
+        el.innerHTML = '<div class="no-data">No active rooms right now</div>';
+        return;
+      }
+
+      for (var i = 0; i < list.length; i++) {
+        var room  = list[i];
+        var users = room.users || [];
+
+        var card = document.createElement('div');
+        card.className = 'room-card';
+
+        var header = document.createElement('div');
+        header.className = 'room-card-header';
+        var info = document.createElement('div');
+        var roomIdEl = document.createElement('div');
+        roomIdEl.className   = 'room-id';
+        roomIdEl.textContent = '\uD83D\uDEAA ' + room.room_id;
+        var roomMeta = document.createElement('div');
+        roomMeta.className   = 'room-meta';
+        roomMeta.textContent = room.user_count + ' user' + (room.user_count !== 1 ? 's' : '');
+        info.appendChild(roomIdEl);
+        info.appendChild(roomMeta);
+        header.appendChild(info);
+        card.appendChild(header);
+
+        var usersList = document.createElement('div');
+        usersList.className = 'users-list';
+
+        for (var j = 0; j < users.length; j++) {
+          var u    = users[j];
+          var pill = document.createElement('span');
+          pill.className = 'user-pill' + (u.is_host ? ' host' : '');
+          pill.appendChild(document.createTextNode((u.is_host ? '\uD83D\uDC51 ' : '') + u.name + ' '));
+
+          var btn = document.createElement('button');
+          btn.textContent    = '\u2715';
+          btn.title          = 'Ban';
+          btn.style.cssText  = 'background:none;border:none;cursor:pointer;color:var(--admin-danger);font-size:.8rem;';
+          (function(sid, name) {
+            btn.onclick = function() { banUser(sid, name); };
+          })(u.sid, u.name);
+
+          pill.appendChild(btn);
+          usersList.appendChild(pill);
+        }
+        card.appendChild(usersList);
+        el.appendChild(card);
+      }
+    })
+    .catch(function(e) { console.error('Rooms error', e); });
+  }
+
+  // ── Orders ─────────────────────────────────────────────────────────────────
+  function loadOrders() {
+    var filterEl = document.getElementById('orderFilter');
+    var filter   = filterEl ? filterEl.value : '';
+    var url      = '/api/admin/orders' + (filter ? '?status=' + filter : '');
+
+    apiFetch(url)
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      var tbody  = document.getElementById('ordersBody');
+      var orders = data.orders || [];
+      document.getElementById('ordersUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+      if (!orders.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="no-data">No orders yet</td></tr>';
+        return;
+      }
+
+      var STATUS_COLORS = {
+        'paid':     'var(--admin-success)',
+        'pending':  'var(--admin-warning)',
+        'failed':   'var(--admin-danger)',
+        'refunded': 'var(--admin-muted)'
+      };
+
+      var rows = '';
+      for (var i = 0; i < orders.length; i++) {
+        var o       = orders[i];
+        var color   = STATUS_COLORS[o.payment_status] || 'var(--admin-muted)';
+        var sched   = o.scheduled_time ? new Date(o.scheduled_time).toLocaleString() : '&mdash;';
+        var created = o.created_at     ? new Date(o.created_at).toLocaleDateString() : '&mdash;';
+        rows +=
+          '<tr>' +
+          '<td>#' + (o.id || '') + '</td>' +
+          '<td>' +
+            '<div style="font-weight:600">' + esc(o.client_name) + '</div>' +
+            '<div style="font-size:.75rem;color:var(--admin-muted)">' + esc(o.client_email) + '</div>' +
+          '</td>' +
+          '<td>' + esc(o.service_type) + '</td>' +
+          '<td><span style="color:' + color + ';font-weight:600">' + esc((o.payment_status || '').toUpperCase()) + '</span></td>' +
+          '<td><code style="font-size:.75rem">' + esc(o.room_id) + '</code></td>' +
+          '<td style="font-size:.8rem">' + sched + '</td>' +
+          '<td style="font-size:.8rem">' + created + '</td>' +
+          '</tr>';
+      }
+      tbody.innerHTML = rows;
+    })
+    .catch(function(e) { console.error('Orders error', e); });
+  }
+
+  // ── Room Admins ────────────────────────────────────────────────────────────
+  function loadRoomAdmins() {
+    return apiFetch('/api/admin/room-admins')
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      var tbody = document.getElementById('roomAdminsBody');
+      var list  = data.room_admins || [];
+      if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="no-data">No Room Admins yet</td></tr>';
+        return;
+      }
+      var rows = '';
+      for (var i = 0; i < list.length; i++) {
+        var a = list[i];
+        rows +=
+          '<tr>' +
+          '<td>' + esc(a.email) + '</td>' +
+          '<td><code>' + esc(a.room_id) + '</code></td>' +
+          '<td>' + esc(a.created_by) + '</td>' +
+          '<td>' + esc(a.created_at_fmt || '') + '</td>' +
+          '<td><button class="btn btn-danger btn-sm" onclick="deleteRoomAdmin(\'' + esc(a.email) + '\')">Delete</button></td>' +
+          '</tr>';
+      }
+      tbody.innerHTML = rows;
+    })
+    .catch(function(e) { console.error('Room admins error', e); });
+  }
+
+  // ── Ban user ───────────────────────────────────────────────────────────────
+  function banUser(sid, name) {
+    if (!confirm('Ban and kick "' + name + '"? They will be removed immediately.')) return;
+    apiFetch('/api/admin/users/' + encodeURIComponent(sid) + '/ban', 'POST')
+    .then(function(res) {
+      if (res.ok) { alert(name + ' has been banned.'); loadRooms(); }
+      else { res.json().then(function(d) { alert(d.error || 'Ban failed.'); }); }
+    });
+  }
+
+  // ── Delete Room Admin ──────────────────────────────────────────────────────
+  function deleteRoomAdmin(email) {
+    if (!confirm('Delete Room Admin "' + email + '"?')) return;
+    apiFetch('/api/admin/room-admins/' + encodeURIComponent(email), 'DELETE')
+    .then(function(res) { if (res.ok) { loadRoomAdmins(); } });
+  }
+
+  // ── Create Room Admin Modal ────────────────────────────────────────────────
+  function openCreateModal()  { document.getElementById('createModal').classList.add('open'); }
+  function closeCreateModal() {
+    document.getElementById('createModal').classList.remove('open');
+    document.getElementById('createError').textContent = '';
+  }
+
+  function submitCreateRoomAdmin() {
+    var email    = document.getElementById('newEmail').value.trim();
+    var password = document.getElementById('newPassword').value;
+    var room_id  = document.getElementById('newRoomId').value.trim();
+    if (!email || !password || !room_id) {
+      document.getElementById('createError').textContent = 'All fields are required.';
+      return;
+    }
+    apiFetch('/api/admin/room-admins', 'POST', { email: email, password: password, room_id: room_id })
+    .then(function(res) {
+      return res.json().then(function(d) { return { ok: res.ok, data: d }; });
+    })
+    .then(function(r) {
+      if (r.ok) {
+        closeCreateModal();
+        document.getElementById('newEmail').value    = '';
+        document.getElementById('newPassword').value = '';
+        document.getElementById('newRoomId').value   = '';
+        loadRoomAdmins();
+      } else {
+        document.getElementById('createError').textContent = r.data.error || 'Failed to create Room Admin.';
+      }
+    });
+  }
+
+  // ── API helper ─────────────────────────────────────────────────────────────
+  function apiFetch(url, method, body) {
+    method = method || 'GET';
+    var headers = { 'Content-Type': 'application/json' };
+    if (_token) headers['Authorization'] = 'Bearer ' + _token;
+    var opts = { method: method, headers: headers };
+    if (body) opts.body = JSON.stringify(body);
+    return fetch(url, opts);
+  }
+
+  function esc(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  // ── Auto-login if token in session ────────────────────────────────────────
+  if (_token) {
+    apiFetch('/api/admin/me')
+    .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, data: d }; }); })
+    .then(function(r) {
+      if (r.ok && r.data.role === 'super_admin') {
+        showDashboard(r.data.email);
+      } else {
+        sessionStorage.removeItem('sa_token');
+        _token = '';
+      }
+    })
+    .catch(function() { sessionStorage.removeItem('sa_token'); _token = ''; });
+  }
+</script>
+</body>
+</html>

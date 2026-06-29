@@ -8,7 +8,7 @@
 </head>
 <body class="room-page">
 
-  <!-- ── Auth guard ────────────────────────────────────────────────────── -->
+  <!-- Auth guard -->
   <div id="authGuard" class="modal-overlay">
     <div class="modal auth-modal">
       <div class="logo small"><span class="logo-icon">📹</span><span class="logo-text">MeetFree</span></div>
@@ -17,70 +17,52 @@
     </div>
   </div>
 
-  <!-- ── Pre-call modal ────────────────────────────────────────────────── -->
+  <!-- Pre-call modal -->
   <div id="preCallModal" class="modal-overlay hidden">
     <div class="modal">
       <div class="logo small"><span class="logo-icon">📹</span><span class="logo-text">MeetFree</span></div>
       <h2>Ready to join?</h2>
       <p class="room-label">Room: <strong>{{ room_id }}</strong></p>
-
       <div class="preview-wrapper">
         <video id="previewVideo" autoplay muted playsinline></video>
-        <div id="previewPlaceholder" class="video-placeholder">
-          <span>📷</span><p>Camera off</p>
-        </div>
+        <div id="previewPlaceholder" class="video-placeholder"><span>📷</span><p>Camera off</p></div>
       </div>
-
       <p id="localNameDisplay" class="name-display"></p>
-
       <div class="pre-controls">
-        <button class="ctrl-btn" onclick="togglePreviewCamera()" title="Toggle camera">
-          <span id="previewCamIcon">📷</span>
-        </button>
-        <button class="ctrl-btn" onclick="togglePreviewMic()" title="Toggle mic">
-          <span id="previewMicIcon">🎙️</span>
-        </button>
+        <button class="ctrl-btn" onclick="togglePreviewCamera()"><span id="previewCamIcon">📷</span></button>
+        <button class="ctrl-btn" onclick="togglePreviewMic()"><span id="previewMicIcon">🎙️</span></button>
       </div>
-
       <button class="join-btn" onclick="enterRoom()">Join Meeting</button>
     </div>
   </div>
 
-  <!-- ── Lobby waiting screen ──────────────────────────────────────────── -->
+  <!-- Lobby waiting screen -->
   <div id="lobbyScreen" class="modal-overlay hidden">
     <div class="modal lobby-modal">
       <div class="logo small"><span class="logo-icon">📹</span><span class="logo-text">MeetFree</span></div>
       <div class="lobby-pulse">⏳</div>
       <h2>Waiting to be admitted</h2>
-      <p class="lobby-msg" id="lobbyMessage">
-        Please wait — the host will let you in shortly.
-      </p>
+      <p class="lobby-msg" id="lobbyMessage">Please wait — the host will let you in shortly.</p>
       <p class="room-label">Room: <strong>{{ room_id }}</strong></p>
-      <button class="secondary-btn" onclick="leaveLobby()" style="margin-top:1rem">
-        Cancel
-      </button>
+      <button class="secondary-btn" onclick="leaveLobby()" style="margin-top:1rem">Cancel</button>
     </div>
   </div>
 
-  <!-- ── Denied screen ─────────────────────────────────────────────────── -->
+  <!-- Denied screen -->
   <div id="deniedScreen" class="modal-overlay hidden">
     <div class="modal" style="text-align:center">
       <div style="font-size:3rem">🚫</div>
       <h2>Entry denied</h2>
-      <p class="subtitle">The host has denied your request to join this meeting.</p>
-      <a href="/" class="join-btn" style="display:inline-block;text-decoration:none;margin-top:1rem">
-        Back to Home
-      </a>
+      <p class="subtitle">The host denied your request to join this meeting.</p>
+      <a href="/" class="join-btn" style="display:inline-block;text-decoration:none;margin-top:1rem">Back to Home</a>
     </div>
   </div>
 
-  <!-- ── Main Room ─────────────────────────────────────────────────────── -->
+  <!-- Main Room -->
   <div id="roomContainer" class="room-container hidden">
-
-    <!-- Video Grid -->
     <div id="videoGrid" class="video-grid grid-1"></div>
 
-    <!-- Admin Lobby Panel (only visible to host) -->
+    <!-- Admin lobby panel -->
     <div id="lobbyPanel" class="lobby-panel hidden">
       <div class="lobby-panel-header">
         <span>🚪 Waiting Room</span>
@@ -92,11 +74,15 @@
       </div>
     </div>
 
-    <!-- Chat Sidebar -->
+    <!-- Chat Sidebar — now shows history -->
     <div id="chatPanel" class="chat-panel hidden">
       <div class="chat-header">
         <span>Room Chat</span>
         <button onclick="toggleChat()" class="close-btn">✕</button>
+      </div>
+      <!-- History separator shown when history is loaded -->
+      <div id="historyBanner" class="history-banner hidden">
+        📜 Chat history loaded
       </div>
       <div id="chatMessages" class="chat-messages"></div>
       <div class="chat-input-row">
@@ -105,21 +91,15 @@
         <button onclick="sendChat()">Send</button>
       </div>
     </div>
-
   </div>
 
-  <!-- ── Control Bar ───────────────────────────────────────────────────── -->
+  <!-- Control Bar -->
   <div id="controlBar" class="control-bar hidden">
-
     <div class="controls-left">
       <span class="room-name-badge" title="{{ room_id }}">{{ room_id }}</span>
-      <span id="participantCount" class="participant-count">
-        👥 <span id="participantNum">1</span>
-      </span>
-      <!-- Admin: lobby notification button -->
+      <span id="participantCount" class="participant-count">👥 <span id="participantNum">1</span></span>
       <button id="lobbyBtn" class="ctrl-btn hidden" onclick="toggleLobbyPanel()" title="Waiting Room">
-        🚪
-        <span id="lobbyBadge" class="badge hidden">0</span>
+        🚪 <span id="lobbyBadge" class="badge hidden">0</span>
       </button>
     </div>
 
@@ -129,7 +109,7 @@
         <span class="ctrl-label">Mic</span>
       </div>
       <div class="ctrl-group">
-        <button id="camBtn"    class="ctrl-btn active" onclick="toggleCamera()"      title="Camera on/off (V)"><span id="camIcon">📷</span></button>
+        <button id="camBtn"    class="ctrl-btn active" onclick="toggleCamera()"      title="Camera (V)"><span id="camIcon">📷</span></button>
         <span class="ctrl-label">Camera</span>
       </div>
       <div class="ctrl-group">
@@ -147,20 +127,14 @@
     </div>
 
     <div class="controls-right">
-      <button class="ctrl-btn" onclick="toggleChat()" title="Chat (C)">
-        💬 <span id="chatBadge" class="badge hidden">0</span>
-      </button>
+      <button class="ctrl-btn" onclick="toggleChat()" title="Chat (C)">💬<span id="chatBadge" class="badge hidden">0</span></button>
       <button class="ctrl-btn" onclick="copyRoomLink()" id="copyBtn" title="Copy invite link">🔗</button>
-      <div id="connQuality" class="conn-quality" title="Connection quality">
-        <span id="qualityIcon">📶</span>
-      </div>
+      <div id="connQuality" class="conn-quality"><span id="qualityIcon">📶</span></div>
     </div>
-
   </div>
 
   <div id="toast" class="toast hidden"></div>
 
-  <!-- Scripts -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
   <script>const ROOM_ID = "{{ room_id }}";</script>
   <script src="/frontend/app.js"></script>
