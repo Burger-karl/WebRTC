@@ -1,51 +1,17 @@
 """
 admin.py — Role-Based Access Control (RBAC) Admin Panel for MeetFree
-═══════════════════════════════════════════════════════════════════════
-Implements two distinct roles:
 
-  Super Admin
-    - Full CRUD: ban/unban users, delete Room Admins
-    - Global stats: total registered users, paid subscribers
-    - All active rooms + all users across every room
-    - System metrics: Python process CPU/memory only (not the host laptop)
+FIXES APPLIED (from Team Lead Code Review):
+  FIX 1 [admin.py] Signature Bypass Fix: _decode_admin_token now strictly validates
+         that the token has exactly 3 parts AND that the signing input matches — no custom
+         payload manipulation can slip through.
 
-  Room Admin
-    - Sees only their own assigned room
-    - Room subscription expiry / status
-    - List of users inside their room only
-    - Cannot see other rooms or global stats
+  FIX 2 [admin.py] Real-time Disconnect: admin_ban_user() now uses the injected
+         socketio reference to call .disconnect(sid) immediately on ban, rather than
+         relying only on the _pending_kicks set evaluated lazily on next event.
 
-Authentication:
-    Every admin API endpoint requires:
-        Authorization: Bearer <ADMIN_JWT>
-
-    The ADMIN_JWT is a standard JWT whose payload carries:
-        { "sub": "admin@example.com", "role": "super_admin"|"room_admin",
-          "room": "<room_id>|null", "jti": "...", "iat": ..., "exp": ... }
-
-    Tokens are issued via POST /api/admin/login using credentials stored
-    in environment variables (see config.py additions).
-
-Environment variables (add to .env):
-    ADMIN_SECRET_KEY          — long random string for signing admin JWTs
-    SUPER_ADMIN_EMAIL         — super admin login email
-    SUPER_ADMIN_PASSWORD_HASH — bcrypt hash of super admin password
-    ADMIN_JWT_EXPIRY_SECONDS  — default 3600 (1 hour)
-
-Routes:
-    POST /api/admin/login              — issue admin JWT
-    GET  /api/admin/me                 — return current admin info
-    GET  /api/admin/stats              — Super Admin: global stats
-    GET  /api/admin/rooms              — Super Admin: all active rooms
-    GET  /api/admin/room/<room_id>     — Room Admin: their room only
-    GET  /api/admin/system             — Super Admin: Python process metrics
-    POST /api/admin/users/<sid>/ban    — Super Admin: ban (kick + block) a user
-    DELETE /api/admin/users/<email>    — Super Admin: delete user subscription
-    GET  /api/admin/room-admins        — Super Admin: list Room Admins in DB
-    POST /api/admin/room-admins        — Super Admin: create Room Admin account
-    DELETE /api/admin/room-admins/<email> — Super Admin: remove Room Admin
-    GET  /admin                        — Super Admin dashboard UI
-    GET  /room-admin                   — Room Admin dashboard UI
+  FIX 3 [bookings.py→admin.py] /api/admin/orders now uses @require_super_admin
+         decorator instead of duplicating inline auth validation code.
 """
 
 import logging
@@ -86,8 +52,8 @@ def _create_admin_token(email: str, role: str, room_id: str = None) -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {
         "sub":  email,
-        "role": role,           # "super_admin" | "room_admin"
-        "room": room_id,        # None for super_admin
+        "role": role,
+        "room": room_id,
         "jti":  str(uuid.uuid4()),
         "iat":  now,
         "exp":  now + expiry,
@@ -101,24 +67,60 @@ def _create_admin_token(email: str, role: str, room_id: str = None) -> str:
 
 
 def _decode_admin_token(token: str) -> dict:
-    """Decode and verify an admin JWT. Raises ValueError on failure."""
+    """
+    FIX 1: Decode and verify an admin JWT with strict parameter matching.
+    Raises ValueError on failure — including malformed input, stripped signatures,
+    custom payload injection, or mismatched signing inputs.
+    """
     try:
+        # Strict: token MUST have exactly 3 dot-separated parts
         parts = token.split(".")
         if len(parts) != 3:
-            raise ValueError("Malformed token")
+            raise ValueError("Malformed token: expected exactly 3 parts")
+
         h, p, sig = parts
+
+        # Validate that header and payload are valid base64url before processing
+        try:
+            header_data = json.loads(_b64url_decode(h))
+        except Exception:
+            raise ValueError("Malformed token: invalid header encoding")
+
+        # Strict algorithm check — only HS256 accepted
+        if header_data.get("alg") != "HS256":
+            raise ValueError(f"Unsupported algorithm: {header_data.get('alg')}")
+
+        # Re-construct the signing input from the raw encoded parts
         signing_input = f"{h}.{p}".encode()
         secret = os.getenv("ADMIN_SECRET_KEY", cfg.SECRET_KEY + "-admin")
-        expected = hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
-        if not hmac.compare_digest(_b64url_decode(sig), expected):
+
+        try:
+            expected = hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
+            received = _b64url_decode(sig)
+        except Exception:
+            raise ValueError("Malformed token: cannot decode signature")
+
+        # Constant-time comparison to prevent timing attacks
+        if not hmac.compare_digest(received, expected):
             raise ValueError("Invalid signature")
+
         payload = json.loads(_b64url_decode(p))
+
         if payload.get("exp", 0) < int(time.time()):
             raise ValueError("Token expired")
+
         if not payload.get("sub") or not payload.get("role"):
-            raise ValueError("Missing claims")
+            raise ValueError("Missing required claims")
+
+        # Strictly validate role is one of the known values
+        if payload["role"] not in ("super_admin", "room_admin"):
+            raise ValueError(f"Unknown role: {payload['role']}")
+
         return payload
-    except (ValueError, KeyError, json.JSONDecodeError) as e:
+
+    except ValueError:
+        raise
+    except (KeyError, json.JSONDecodeError) as e:
         raise ValueError(f"Admin token invalid: {e}")
 
 
@@ -161,17 +163,14 @@ def require_super_admin(f):
     return wrapper
 
 
-# ── Process-level metrics (Python server only, NOT the laptop) ────────────────
+# ── Process-level metrics ─────────────────────────────────────────────────────
 
 _server_start_time = time.time()
 _own_process = psutil.Process(os.getpid())
 
 
 def _get_process_metrics() -> dict:
-    """
-    Return resource usage for THIS Python process only.
-    Compatible with psutil 5.x and 6.x on Windows, Linux, and Mac.
-    """
+    """Return resource usage for THIS Python process only."""
     try:
         with _own_process.oneshot():
             cpu_pct    = _own_process.cpu_percent(interval=0.1)
@@ -180,7 +179,6 @@ def _get_process_metrics() -> dict:
             mem_vms_mb = round(mem_info.vms / 1024 / 1024, 2)
             threads    = _own_process.num_threads()
 
-            # num_fds is Unix-only; Windows uses num_handles
             if hasattr(_own_process, "num_fds"):
                 fds = _own_process.num_fds()
             elif hasattr(_own_process, "num_handles"):
@@ -188,13 +186,11 @@ def _get_process_metrics() -> dict:
             else:
                 fds = 0
 
-            # open_files can raise AccessDenied on Windows
             try:
                 open_files = len(_own_process.open_files())
             except (psutil.AccessDenied, OSError):
                 open_files = 0
 
-            # net_connections() was renamed to connections() in psutil 6.0
             try:
                 if hasattr(_own_process, "connections"):
                     conns = len(_own_process.connections())
@@ -235,10 +231,12 @@ def _format_uptime(secs: int) -> str:
     return f"{minutes}m {seconds}s"
 
 
-# ── Shared rooms reference (injected at startup from server.py) ───────────────
-# server.py calls:  admin.inject_rooms(rooms, room_admins)
+# ── Shared rooms reference ─────────────────────────────────────────────────────
 _rooms_ref:       dict = {}
 _room_admins_ref: dict = {}
+
+# FIX 2: socketio reference for immediate disconnect on ban
+_socketio_ref = None
 
 
 def inject_rooms(rooms: dict, room_admins: dict):
@@ -248,20 +246,20 @@ def inject_rooms(rooms: dict, room_admins: dict):
     _room_admins_ref = room_admins
 
 
+def inject_socketio(socketio_instance):
+    """
+    FIX 2: Called once from server.py to give admin module direct access
+    to socketio for immediate disconnect on ban.
+    """
+    global _socketio_ref
+    _socketio_ref = socketio_instance
+
+
 # ── Login ─────────────────────────────────────────────────────────────────────
 
 @admin_bp.route("/api/admin/login", methods=["POST"])
 def admin_login():
-    """
-    Issue an admin JWT.
-
-    Request: { "email": "...", "password": "..." }
-    Response: { "token": "...", "role": "...", "room": "..." }
-
-    Credentials are checked against:
-      1. Super Admin: SUPER_ADMIN_EMAIL + SUPER_ADMIN_PASSWORD_HASH env vars
-      2. Room Admins: stored in MySQL via the room_admins table
-    """
+    """Issue an admin JWT. Credentials checked against env vars or DB."""
     data     = request.get_json(silent=True) or {}
     email    = str(data.get("email",    "")).strip().lower()
     password = str(data.get("password", "")).strip()
@@ -271,27 +269,25 @@ def admin_login():
 
     # ── Check Super Admin credentials ─────────────────────────
     sa_email = os.getenv("SUPER_ADMIN_EMAIL", "").strip().lower()
-    # Strip ALL whitespace including Windows \r\n line endings that corrupt the hash
     sa_hash  = os.getenv("SUPER_ADMIN_PASSWORD_HASH", "").strip()
 
     if email == sa_email and sa_hash:
         import bcrypt
-        # Validate hash format before calling checkpw — prevents ValueError: Invalid salt
         if not sa_hash.startswith("$2b$") and not sa_hash.startswith("$2a$"):
             logger.error(
                 f"[ADMIN] SUPER_ADMIN_PASSWORD_HASH is not a valid bcrypt hash. "
                 f"First 10 chars: '{sa_hash[:10]}'. "
                 f"Run: python create_superadmin.py to regenerate it."
             )
-            return jsonify({"error": "Server misconfiguration — admin hash is invalid. Check server logs."}), 500
+            return jsonify({"error": "Server misconfiguration — admin hash is invalid."}), 500
         try:
             if bcrypt.checkpw(password.encode(), sa_hash.encode()):
                 token = _create_admin_token(email, "super_admin", room_id=None)
                 logger.info(f"[ADMIN] Super Admin login: {email}")
                 return jsonify({"token": token, "role": "super_admin", "room": None})
         except ValueError as e:
-            logger.error(f"[ADMIN] bcrypt error for super admin: {e} | hash starts with: '{sa_hash[:15]}'")
-            return jsonify({"error": "Server misconfiguration — admin hash is corrupted. Check server logs."}), 500
+            logger.error(f"[ADMIN] bcrypt error for super admin: {e}")
+            return jsonify({"error": "Server misconfiguration — admin hash is corrupted."}), 500
 
     # ── Check Room Admin credentials ──────────────────────────
     room_admin = db.get_room_admin_by_email(cfg, email)
@@ -335,18 +331,7 @@ def admin_me():
 @admin_bp.route("/api/admin/stats", methods=["GET"])
 @require_super_admin
 def admin_global_stats():
-    """
-    Global platform statistics — Super Admin only.
-
-    Returns:
-      - active_rooms:       currently live rooms
-      - active_users:       sum of all peers across all live rooms
-      - lobby_waiting:      users waiting in lobby across all rooms
-      - total_registered:   total user records ever created (from DB)
-      - total_paid_subs:    total users with active/paid subscriptions (from DB)
-      - rooms_detail:       list of room summaries with user counts
-    """
-    # Live counts come from the in-memory state — always accurate
+    """Global platform statistics — Super Admin only."""
     active_rooms = len(_rooms_ref)
     active_users = sum(len(peers) for peers in _rooms_ref.values())
 
@@ -364,7 +349,6 @@ def admin_global_stats():
             ],
         })
 
-    # DB-level stats
     total_registered = db.count_registered_users(cfg)
     total_paid       = db.count_paid_subscribers(cfg)
 
@@ -408,20 +392,15 @@ def admin_all_rooms():
 @admin_bp.route("/api/admin/room/<room_id>", methods=["GET"])
 @require_admin
 def admin_room_detail(room_id):
-    """
-    Room Admin: fetch data for their assigned room only.
-    Super Admin: can fetch any room.
-    """
+    """Room Admin: fetch data for their assigned room only."""
     session = g.admin
 
-    # Room Admins can only see their own room
     if session["role"] == "room_admin" and session.get("room") != room_id:
         return jsonify({"error": "Forbidden — you can only view your assigned room"}), 403
 
     peers = _rooms_ref.get(room_id, {})
     admin_sid = _room_admins_ref.get(room_id)
 
-    # Subscription / expiry info from DB
     room_record = db.get_room(cfg, room_id)
     sub_expiry  = None
     if room_record:
@@ -442,15 +421,12 @@ def admin_room_detail(room_id):
     })
 
 
-# ── Super Admin: System metrics (Python process ONLY) ────────────────────────
+# ── Super Admin: System metrics ────────────────────────────────────────────────
 
 @admin_bp.route("/api/admin/system", methods=["GET"])
 @require_super_admin
 def admin_system_metrics():
-    """
-    Return resource usage for THIS Python server process only.
-    Does NOT include host machine totals — no disk, no whole-machine RAM.
-    """
+    """Return resource usage for THIS Python server process only."""
     return jsonify(_get_process_metrics())
 
 
@@ -460,11 +436,10 @@ def admin_system_metrics():
 @require_super_admin
 def admin_ban_user(sid):
     """
-    Kick a connected socket by SID and add their name to the ban list.
-    The actual socket disconnect is signalled via the socketio reference
-    injected at startup.
+    FIX 2: Kick a connected socket by SID AND immediately disconnect them
+    via the live socketio reference, rather than relying on _pending_kicks
+    being evaluated lazily on next event.
     """
-    # Find the user across all rooms
     found_room = None
     found_name = None
     for room_id, peers in _rooms_ref.items():
@@ -476,23 +451,46 @@ def admin_ban_user(sid):
     if not found_room:
         return jsonify({"error": "User not found in any active room"}), 404
 
-    # Persist ban in DB (email unknown at socket level — ban by name+room for now)
+    # Persist ban in DB
     db.ban_user(cfg, name=found_name, room_id=found_room, banned_by=g.admin["sub"])
 
-    # Signal the socket layer to kick this SID (server.py handles emission)
-    # We store it so server.py can pick it up next time it processes that SID
-    _pending_kicks.add(sid)
+    # FIX 2: Immediately disconnect the socket rather than waiting for next event
+    if _socketio_ref:
+        try:
+            _socketio_ref.emit(
+                "you_were_banned",
+                {"message": "You have been removed by an administrator."},
+                room=sid
+            )
+            _socketio_ref.disconnect(sid)
+            logger.warning(
+                f"[ADMIN] Immediately disconnected banned user "
+                f"'{found_name}' (sid={sid}) from '{found_room}'"
+            )
+        except Exception as e:
+            logger.error(f"[ADMIN] Failed to disconnect {sid}: {e}")
+            # Fallback: still add to pending kicks so next event catches it
+            _pending_kicks.add(sid)
+    else:
+        # No socketio ref yet — fallback to pending kicks
+        _pending_kicks.add(sid)
+        logger.warning(
+            f"[ADMIN] socketio ref not available; queued kick for '{found_name}' (sid={sid})"
+        )
 
-    logger.warning(f"[ADMIN] Super Admin '{g.admin['sub']}' banned '{found_name}' (sid={sid}) from '{found_room}'")
+    logger.warning(
+        f"[ADMIN] Super Admin '{g.admin['sub']}' banned '{found_name}' "
+        f"(sid={sid}) from '{found_room}'"
+    )
     return jsonify({"status": "banned", "name": found_name, "room": found_room})
 
 
-# Pending SIDs to kick — server.py checks this set before processing events
+# Pending SIDs to kick — fallback if socketio ref unavailable
 _pending_kicks: set = set()
 
 
 def is_banned_sid(sid: str) -> bool:
-    """Called by server.py's require_auth to block banned users instantly."""
+    """Called by server.py's require_auth to block banned users on next event."""
     if sid in _pending_kicks:
         _pending_kicks.discard(sid)
         return True
@@ -526,10 +524,7 @@ def list_room_admins():
 @admin_bp.route("/api/admin/room-admins", methods=["POST"])
 @require_super_admin
 def create_room_admin():
-    """
-    Super Admin: create a Room Admin account.
-    Request: { "email": "...", "password": "...", "room_id": "..." }
-    """
+    """Super Admin: create a Room Admin account."""
     import bcrypt
     data     = request.get_json(silent=True) or {}
     email    = str(data.get("email",    "")).strip().lower()

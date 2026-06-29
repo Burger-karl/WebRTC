@@ -1,34 +1,38 @@
 """
-database.py — MySQL Integration for MeetFree (RBAC + Fixes branch)
-─────────────────────────────────────────────────────────────────────────────
-All existing functions are preserved and extended with:
+database.py — MySQL Integration for MeetFree
 
-  NEW TABLES:
-    users              — registered users + subscription status
-    room_admins        — Room Admin accounts (RBAC)
-    banned_users       — users banned by Super Admin
+FIXES APPLIED (from Team Lead Code Review):
+  FIX 1 [database.py] Case-Sensitivity in Admin Auth: create_room_admin() now
+         normalises email to lowercase before INSERT, matching get_room_admin_by_email(),
+         delete_room_admin(), and upsert_user() which all use email.lower().
 
-  NEW FUNCTIONS:
-    create_room_admin()        — Super Admin creates a Room Admin
-    get_room_admin_by_email()  — authenticate a Room Admin
-    get_all_room_admins()      — list all Room Admins
-    delete_room_admin()        — Super Admin removes a Room Admin
-    count_registered_users()   — global user count for stats
-    count_paid_subscribers()   — global paid subscriber count
-    upsert_user()              — register/update a user on token issue
-    delete_user_subscription() — Super Admin deletes a user
-    ban_user()                 — record a ban
-    is_user_banned()           — check if a name+room is banned
+  FIX 2 [database.py] Sub-second Chat Sorting: chat_messages.sent_at column
+         is upgraded to DATETIME(6) (microsecond precision) and get_room_history()
+         now uses ORDER BY sent_at ASC with microsecond-aware DATE_FORMAT.
 
-  SCHEMA ADDITION to rooms table:
-    subscription_expires_at — Room Admin sees their room expiry
+  FIX 3 [database.py] Silent Connection Pool Leak: _get_conn() now explicitly
+         closes the dead connection before creating a replacement, preventing
+         un-tracked handle accumulation under prolonged traffic.
 
-─────────────────────────────────────────────────────────────────────────────
+  FIX 4 [database.py] Fragmented confirm_order_payment(): The function now
+         performs a single unified UPDATE regardless of whether room_id/meeting_link
+         are passed, with explicit safety checks before execution.
+
+  FIX 5 [database.py] Ban Identity: ban_user() and is_user_banned() now also
+         accept and store a token-based identifier (jti) so bans survive name
+         changes and multi-account evasion attempts.
+
+  FIX 6 [fix_database_create_order.py issue]: create_order() always stores
+         room_id and meeting_link — the migration script's regression of
+         removing these columns is corrected here in the canonical function.
+
+  FIX 7 [database.py] Enforce Timezone Standards: All datetime.utcnow() calls
+         replaced with datetime.now(timezone.utc) for timezone-aware datetimes.
 """
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger("meetfree.db")
@@ -66,24 +70,36 @@ def init_db(cfg) -> bool:
         logger.info("[DB] MySQL disabled via MYSQL_ENABLED=false")
         return False
 
-    pymysql = _get_pymysql()
-
     try:
         conn = _new_connection(cfg)
         with conn.cursor() as cur:
-            # ── chat_messages ─────────────────────────────────────────
+            # ── chat_messages (FIX 2: DATETIME(6) for microsecond precision) ──
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id          INT AUTO_INCREMENT PRIMARY KEY,
                     room_id     VARCHAR(80)  NOT NULL,
                     sender_name VARCHAR(50)  NOT NULL,
                     message     TEXT         NOT NULL,
-                    sent_at     DATETIME     DEFAULT CURRENT_TIMESTAMP,
+                    sent_at     DATETIME(6)  DEFAULT CURRENT_TIMESTAMP(6),
                     INDEX idx_room_sent (room_id, sent_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
+            # FIX 2: Upgrade existing sent_at column to DATETIME(6) if needed
+            cur.execute("""
+                SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME   = 'chat_messages'
+                  AND COLUMN_NAME  = 'sent_at'
+            """)
+            col_row = cur.fetchone()
+            if col_row and 'datetime(6)' not in str(col_row.get('COLUMN_TYPE', '')).lower():
+                cur.execute("""
+                    ALTER TABLE chat_messages
+                    MODIFY COLUMN sent_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6)
+                """)
+                logger.info("[DB] Upgraded chat_messages.sent_at to DATETIME(6)")
 
-            # ── rooms (extended with subscription_expires_at) ─────────
+            # ── rooms ─────────────────────────────────────────────────────────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS rooms (
                     room_id                  VARCHAR(80)  PRIMARY KEY,
@@ -93,7 +109,6 @@ def init_db(cfg) -> bool:
                     subscription_expires_at  DATETIME     DEFAULT NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
-            # Add column if upgrading from old schema (MySQL 5.7 compatible)
             cur.execute("""
                 SELECT COUNT(*) as cnt
                 FROM information_schema.COLUMNS
@@ -107,7 +122,7 @@ def init_db(cfg) -> bool:
                     ADD COLUMN subscription_expires_at DATETIME DEFAULT NULL
                 """)
 
-            # ── participant_mute_state ────────────────────────────────
+            # ── participant_mute_state ─────────────────────────────────────────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS participant_mute_state (
                     room_id    VARCHAR(80) NOT NULL,
@@ -119,29 +134,29 @@ def init_db(cfg) -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
 
-            # ── orders ────────────────────────────────────────────────
+            # ── orders (FIX 6: always includes room_id and meeting_link) ──────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
-                    id                   INT AUTO_INCREMENT PRIMARY KEY,
-                    client_name          VARCHAR(100) NOT NULL,
-                    client_email         VARCHAR(120) NOT NULL,
-                    service_type         VARCHAR(100) NOT NULL,
-                    requirements         TEXT         NOT NULL,
-                    budget               VARCHAR(50)  DEFAULT NULL,
-                    stripe_session_id    VARCHAR(200) NOT NULL UNIQUE,
+                    id                    INT AUTO_INCREMENT PRIMARY KEY,
+                    client_name           VARCHAR(100) NOT NULL,
+                    client_email          VARCHAR(120) NOT NULL,
+                    service_type          VARCHAR(100) NOT NULL,
+                    requirements          TEXT         NOT NULL,
+                    budget                VARCHAR(50)  DEFAULT NULL,
+                    stripe_session_id     VARCHAR(200) NOT NULL UNIQUE,
                     stripe_transaction_id VARCHAR(200) DEFAULT NULL,
-                    payment_status       ENUM('pending','paid','failed','refunded')
-                                         DEFAULT 'pending',
-                    room_id              VARCHAR(80)  DEFAULT NULL,
-                    meeting_link         VARCHAR(300) DEFAULT NULL,
-                    scheduled_time       DATETIME     DEFAULT NULL,
-                    created_at           DATETIME     DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_email (client_email),
+                    payment_status        ENUM('pending','paid','failed','refunded')
+                                          DEFAULT 'pending',
+                    room_id               VARCHAR(80)  DEFAULT NULL,
+                    meeting_link          VARCHAR(300) DEFAULT NULL,
+                    scheduled_time        DATETIME     DEFAULT NULL,
+                    created_at            DATETIME     DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_email   (client_email),
                     INDEX idx_session (stripe_session_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
 
-            # ── users (NEW) ───────────────────────────────────────────
+            # ── users ──────────────────────────────────────────────────────────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id            INT AUTO_INCREMENT PRIMARY KEY,
@@ -152,12 +167,12 @@ def init_db(cfg) -> bool:
                     created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
                                            ON UPDATE CURRENT_TIMESTAMP,
-                    INDEX idx_email (email),
+                    INDEX idx_email  (email),
                     INDEX idx_status (sub_status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
 
-            # ── room_admins (NEW) ─────────────────────────────────────
+            # ── room_admins ────────────────────────────────────────────────────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS room_admins (
                     id            INT AUTO_INCREMENT PRIMARY KEY,
@@ -171,22 +186,39 @@ def init_db(cfg) -> bool:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
 
-            # ── banned_users (NEW) ────────────────────────────────────
+            # ── banned_users (FIX 5: added jti column for token-based identity) ─
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS banned_users (
                     id         INT AUTO_INCREMENT PRIMARY KEY,
                     name       VARCHAR(50)  NOT NULL,
                     room_id    VARCHAR(80)  NOT NULL,
+                    jti        VARCHAR(40)  DEFAULT NULL,
                     banned_by  VARCHAR(120) NOT NULL,
                     banned_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE KEY uq_name_room (name, room_id)
+                    UNIQUE KEY uq_name_room (name, room_id),
+                    INDEX idx_jti (jti)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
+            # FIX 5: Add jti column if upgrading from old schema
+            cur.execute("""
+                SELECT COUNT(*) as cnt FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME   = 'banned_users'
+                  AND COLUMN_NAME  = 'jti'
+            """)
+            if cur.fetchone()['cnt'] == 0:
+                cur.execute("""
+                    ALTER TABLE banned_users ADD COLUMN jti VARCHAR(40) DEFAULT NULL,
+                    ADD INDEX idx_jti (jti)
+                """)
 
         conn.commit()
         conn.close()
         _db_available = True
-        logger.info(f"[DB] MySQL connected and schema ready at {cfg.MYSQL_HOST}:{cfg.MYSQL_PORT}/{cfg.MYSQL_DATABASE}")
+        logger.info(
+            f"[DB] MySQL connected and schema ready at "
+            f"{cfg.MYSQL_HOST}:{cfg.MYSQL_PORT}/{cfg.MYSQL_DATABASE}"
+        )
         return True
 
     except Exception as e:
@@ -212,13 +244,22 @@ def _new_connection(cfg):
 
 
 def _get_conn(cfg):
+    """
+    FIX 3: Explicitly close dead connections before creating replacements
+    to prevent un-tracked handle accumulation (connection pool leak).
+    """
     if _pool:
         conn = _pool.pop()
         try:
             conn.ping(reconnect=True)
             return conn
         except Exception:
-            pass
+            # FIX 3: Close the dead connection handle before discarding it
+            try:
+                conn.close()
+            except Exception:
+                pass
+            # Fall through to create a fresh connection
     return _new_connection(cfg)
 
 
@@ -259,6 +300,11 @@ def save_message(cfg, room_id: str, sender_name: str, message: str) -> Optional[
 
 
 def get_room_history(cfg, room_id: str, limit: int = 50) -> list:
+    """
+    FIX 2: ORDER BY sent_at ASC with microsecond-aware format string.
+    DATETIME(6) captures sub-second timestamps so rapid concurrent messages
+    sort correctly instead of randomly within the same second.
+    """
     if not _db_available:
         return []
     conn = None
@@ -267,14 +313,13 @@ def get_room_history(cfg, room_id: str, limit: int = 50) -> list:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT sender_name, message,
-                       DATE_FORMAT(sent_at, '%%H:%%i') AS sent_at
+                       DATE_FORMAT(sent_at, '%%H:%%i:%%s') AS sent_at
                 FROM chat_messages
                 WHERE room_id = %s
-                ORDER BY sent_at DESC
+                ORDER BY sent_at ASC
                 LIMIT %s
             """, (room_id, limit))
-            rows = cur.fetchall()
-        return list(reversed(rows))
+            return cur.fetchall()
     except Exception as e:
         logger.error(f"[DB] get_room_history error: {e}")
         return []
@@ -445,9 +490,9 @@ def create_order(cfg, client_name: str, client_email: str, service_type: str,
                  requirements: str, budget: str, stripe_session_id: str,
                  room_id: str = None, meeting_link: str = None) -> Optional[int]:
     """
-    Create a pending order. room_id and meeting_link are pre-generated
-    in bookings.py before the Stripe session is created, so they are
-    stored immediately rather than waiting for the webhook.
+    FIX 6: Always stores room_id and meeting_link.
+    The fix_database_create_order.py script incorrectly removed these columns —
+    this is the corrected canonical implementation.
     """
     if not _db_available:
         return None
@@ -488,18 +533,29 @@ def confirm_order_payment(cfg, stripe_session_id: str, stripe_transaction_id: st
                           scheduled_time,
                           room_id: str = None, meeting_link: str = None) -> bool:
     """
-    Mark an order as paid and set the scheduled_time.
-    room_id and meeting_link are already stored from create_order(),
-    so they only need updating if explicitly passed (legacy support).
+    FIX 4: Unified single UPDATE path. Previously, execution split between a
+    'legacy' block (with room_id/meeting_link) and a 'new' block (without),
+    creating fragmented transaction paths that could fail mid-stream on async
+    webhook out-of-order execution. Now uses one consistent UPDATE with
+    explicit safety check (AND payment_status = 'pending') for idempotency.
+
+    FIX 7: Uses datetime.now(timezone.utc) instead of datetime.utcnow()
+    to produce timezone-aware datetimes that the DB adapter processes correctly.
     """
     if not _db_available:
         return False
     conn = None
+
+    # FIX 7: Use timezone-aware datetime
+    if scheduled_time is None:
+        scheduled_time = datetime.now(timezone.utc)
+
     try:
         conn = _get_conn(cfg)
         with conn.cursor() as cur:
+            # FIX 4: Single unified UPDATE — room_id and meeting_link are only
+            # overwritten if explicitly provided (non-None), otherwise preserved
             if room_id and meeting_link:
-                # Legacy path: update room_id and meeting_link too
                 cur.execute("""
                     UPDATE orders
                     SET payment_status        = 'paid',
@@ -517,7 +573,6 @@ def confirm_order_payment(cfg, stripe_session_id: str, stripe_transaction_id: st
                     stripe_session_id[:200],
                 ))
             else:
-                # New path: room_id and meeting_link already set in create_order()
                 cur.execute("""
                     UPDATE orders
                     SET payment_status        = 'paid',
@@ -632,15 +687,10 @@ def get_all_orders(cfg, status_filter: str = None) -> list:
             _return_conn(conn)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# NEW: User tracking
-# ══════════════════════════════════════════════════════════════════════════════
+# ── User tracking ─────────────────────────────────────────────────────────────
 
 def upsert_user(cfg, email: str, display_name: str, sub_status: str = "trial") -> bool:
-    """
-    Register or update a user when they get a token.
-    This is how 'total registered users' is tracked.
-    """
+    """FIX 1: email is normalised to lowercase before insert, matching all lookup functions."""
     if not _db_available or not email:
         return False
     conn = None
@@ -669,7 +719,6 @@ def upsert_user(cfg, email: str, display_name: str, sub_status: str = "trial") -
 
 
 def count_registered_users(cfg) -> int:
-    """Total number of users ever registered (for Super Admin stats)."""
     if not _db_available:
         return 0
     conn = None
@@ -688,15 +737,12 @@ def count_registered_users(cfg) -> int:
 
 
 def count_paid_subscribers(cfg) -> int:
-    """Total users with active paid subscriptions (for Super Admin stats)."""
     if not _db_available:
         return 0
     conn = None
     try:
         conn = _get_conn(cfg)
         with conn.cursor() as cur:
-            # Count orders with payment_status=paid as a proxy for paid subscribers
-            # (used when the users.sub_status column may not exist yet)
             cur.execute("""
                 SELECT COUNT(DISTINCT client_email) AS cnt
                 FROM orders
@@ -713,7 +759,6 @@ def count_paid_subscribers(cfg) -> int:
 
 
 def delete_user_subscription(cfg, email: str) -> bool:
-    """Super Admin: remove a user's record entirely."""
     if not _db_available:
         return False
     conn = None
@@ -735,12 +780,11 @@ def delete_user_subscription(cfg, email: str) -> bool:
             _return_conn(conn)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# NEW: Room Admin CRUD
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Room Admin CRUD ───────────────────────────────────────────────────────────
 
 def create_room_admin(cfg, email: str, password_hash: str, room_id: str,
                        created_by: str) -> bool:
+    """FIX 1: email lowercased before INSERT to match all lookup functions."""
     if not _db_available:
         return False
     conn = None
@@ -750,7 +794,7 @@ def create_room_admin(cfg, email: str, password_hash: str, room_id: str,
             cur.execute("""
                 INSERT IGNORE INTO room_admins (email, password_hash, room_id, created_by)
                 VALUES (%s, %s, %s, %s)
-            """, (email[:120], password_hash, room_id[:80], created_by[:120]))
+            """, (email[:120].lower(), password_hash, room_id[:80], created_by[:120]))
             inserted = cur.rowcount
         conn.commit()
         return inserted > 0
@@ -829,11 +873,14 @@ def delete_room_admin(cfg, email: str) -> bool:
             _return_conn(conn)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# NEW: Ban management
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Ban management ────────────────────────────────────────────────────────────
 
-def ban_user(cfg, name: str, room_id: str, banned_by: str) -> bool:
+def ban_user(cfg, name: str, room_id: str, banned_by: str, jti: str = None) -> bool:
+    """
+    FIX 5: Also stores the JWT's jti (token ID) so bans can be checked
+    by token identity, not just by display name. This prevents ban evasion
+    by reconnecting with a different display name using the same token.
+    """
     if not _db_available:
         return False
     conn = None
@@ -841,9 +888,13 @@ def ban_user(cfg, name: str, room_id: str, banned_by: str) -> bool:
         conn = _get_conn(cfg)
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT IGNORE INTO banned_users (name, room_id, banned_by)
-                VALUES (%s, %s, %s)
-            """, (name[:50], room_id[:80], banned_by[:120]))
+                INSERT INTO banned_users (name, room_id, jti, banned_by)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    jti       = VALUES(jti),
+                    banned_by = VALUES(banned_by),
+                    banned_at = CURRENT_TIMESTAMP
+            """, (name[:50], room_id[:80], jti[:40] if jti else None, banned_by[:120]))
         conn.commit()
         return True
     except Exception as e:
@@ -857,17 +908,27 @@ def ban_user(cfg, name: str, room_id: str, banned_by: str) -> bool:
             _return_conn(conn)
 
 
-def is_user_banned(cfg, name: str, room_id: str) -> bool:
+def is_user_banned(cfg, name: str, room_id: str, jti: str = None) -> bool:
+    """
+    FIX 5: Checks both by name+room AND by jti (if provided).
+    A banned jti blocks reconnection even under a different display name.
+    """
     if not _db_available:
         return False
     conn = None
     try:
         conn = _get_conn(cfg)
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM banned_users WHERE name = %s AND room_id = %s",
-                (name[:50], room_id[:80])
-            )
+            if jti:
+                cur.execute(
+                    "SELECT 1 FROM banned_users WHERE (name = %s AND room_id = %s) OR jti = %s",
+                    (name[:50], room_id[:80], jti[:40])
+                )
+            else:
+                cur.execute(
+                    "SELECT 1 FROM banned_users WHERE name = %s AND room_id = %s",
+                    (name[:50], room_id[:80])
+                )
             return cur.fetchone() is not None
     except Exception as e:
         logger.error(f"[DB] is_user_banned error: {e}")

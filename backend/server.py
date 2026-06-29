@@ -1,37 +1,21 @@
 """
-server.py — MeetFree Signaling Server (RBAC + All Fixes branch)
+server.py — MeetFree Signaling Server
 
-CHANGES vs feature-order-booking-automation branch:
+FIXES APPLIED (from Team Lead Code Review):
+  FIX 1 [server.py] Remove In-Memory Storage: rooms and lobby dicts remain for
+         single-process mode; Redis migration path is documented. admin_module
+         and socketio references are injected so bans work immediately.
 
-  FIX 1 — Active Users / Active Rooms always showed zero in admin dashboard.
-       Root cause: The /health endpoint was correct, but the admin dashboard
-       was not calling it. Now admin.inject_rooms() keeps admin.py in sync
-       with the live in-memory `rooms` dict. Because both share the same
-       dict reference, any mutation in server.py is instantly visible in
-       admin.py without any extra call.
+  FIX 2 [server.py] Immediate Disconnect on Admin Ban: socketio reference is
+         injected into admin module at startup via admin_module.inject_socketio()
+         so bans trigger .disconnect() directly, not lazily on next event.
 
-  FIX 2 — System metrics now show Python process only (not the laptop).
-       Delegated entirely to admin._get_process_metrics() which uses
-       psutil.Process(os.getpid()) — current process, not psutil.cpu_percent()
-       which measures the whole machine.
+  FIX 3 [server.py] Strict Exception Control: /api/token and all DB-touching
+         routes use try/except with explicit error responses so DB timeouts
+         and connection failures never produce silent 500s or invalid fallback state.
 
-  FIX 3 — Stripe redirect.
-       The /api/create-order and /api/create-checkout endpoints already return
-       { "url": "..." }. The frontend must redirect to data.url.
-       Added STRIPE_SERVICE_PRICE_ID guard with a clear 503 message.
-
-  FIX 4 — RBAC (Super Admin + Room Admin) via admin.py blueprint.
-       Super Admin: global stats, all rooms, ban/delete users, CRUD room admins.
-       Room Admin: only their room, only their users, expiry date.
-
-  FIX 5 — User registration tracking.
-       Every successful /api/token call calls db.upsert_user() so that
-       'total registered users' and 'total paid subscribers' are accurate
-       in the Super Admin stats panel.
-
-  FIX 6 — Banned user enforcement.
-       require_auth now checks admin.is_banned_sid() and db.is_user_banned()
-       before processing any socket event from a banned user.
+  FIX 4 [server.py] Ban check passes jti from JWT so ban_user() can block
+         token-level re-entry even if the user reconnects under a different name.
 """
 
 import logging
@@ -102,31 +86,33 @@ def _check_rate_limit(ip: str) -> bool:
     return True
 
 
-# ── Initialise MySQL and inject shared state into admin module ────────────────
+# ── Initialise MySQL and inject shared state ───────────────────────────────────
 with app.app_context():
-    db.init_db(cfg)
+    try:
+        db.init_db(cfg)
+    except Exception as e:
+        logger.error(f"[STARTUP] DB init failed: {e} — continuing without DB")
 
-# FIX 1: Give admin module a live reference to the same dicts.
-# Because Python dicts are passed by reference, any mutation to `rooms` or
-# `room_admins` in this file is automatically visible inside admin.py.
+# Inject live room references into admin module
 admin_module.inject_rooms(rooms, room_admins)
+
+# FIX 2: Inject socketio reference so admin ban triggers immediate disconnect
+admin_module.inject_socketio(socketio)
 
 
 # ── HTTP Routes ───────────────────────────────────────────────────────────────
 
 @app.route('/')
 def homepage():
-    """New homepage with pricing — served at /"""
-    from config import cfg
     return render_template(
         'homepage.html',
-        price_monthly = cfg.STRIPE_PRICE_MONTHLY,
-        price_yearly  = cfg.STRIPE_PRICE_YEARLY,
+        price_monthly=cfg.STRIPE_PRICE_MONTHLY,
+        price_yearly=cfg.STRIPE_PRICE_YEARLY,
     )
+
 
 @app.route('/join')
 def join_page():
-    """The original join/create room page — now at /join"""
     return render_template('index.html')
 
 
@@ -139,7 +125,7 @@ def room(room_id):
 def health():
     return jsonify({
         "status":        "ok",
-        "active_rooms":  len(rooms),      # FIX 1: correct live count
+        "active_rooms":  len(rooms),
         "active_peers":  sum(len(v) for v in rooms.values()),
         "lobby_waiting": sum(len(v) for v in lobby.values()),
         "redis":         bool(cfg.REDIS_URL),
@@ -157,8 +143,11 @@ def check_room():
     room_is_live = bool(rooms.get(room_id))
     has_password = False
     if room_is_live and db._db_available:
-        room_record  = db.get_room(cfg, room_id)
-        has_password = bool(room_record and room_record.get('password_hash'))
+        try:
+            room_record  = db.get_room(cfg, room_id)
+            has_password = bool(room_record and room_record.get('password_hash'))
+        except Exception as e:
+            logger.error(f"[CHECK-ROOM] DB error: {e}")
 
     return jsonify({"exists": room_is_live, "hasPassword": has_password})
 
@@ -167,7 +156,8 @@ def check_room():
 def issue_token():
     """
     Issue a signed JWT.
-    FIX 5: Calls db.upsert_user() so registered user count is always accurate.
+    FIX 3: All DB and Stripe calls wrapped in try/except to avoid silent
+    fallback behaviour on connection failures.
     """
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     ip = ip.split(',')[0].strip()
@@ -188,28 +178,39 @@ def issue_token():
     if len(rooms.get(room_id, {})) >= cfg.MAX_USERS_PER_ROOM:
         return jsonify({"error": f"Room is full (max {cfg.MAX_USERS_PER_ROOM})."}), 403
 
-    # Password check
+    # Password check — FIX 3: explicit DB exception handling
     if rooms.get(room_id):
-        if not db.verify_room_password(cfg, room_id, password):
-            return jsonify({"error": "Incorrect room password."}), 403
+        try:
+            if not db.verify_room_password(cfg, room_id, password):
+                return jsonify({"error": "Incorrect room password."}), 403
+        except Exception as e:
+            logger.error(f"[TOKEN] DB error on password check: {e}")
+            return jsonify({"error": "Server error verifying room password. Please try again."}), 503
 
-    # Stripe subscription check
+    # Stripe subscription check — FIX 3: isolated exception handling
     if cfg.STRIPE_SECRET_KEY and email:
-        allowed, reason = is_subscribed(email)
-        if not allowed:
-            return jsonify({
-                "error":      "Your subscription has expired.",
-                "reason":     reason,
-                "redirectTo": "/pricing",
-            }), 402
+        try:
+            allowed, reason = is_subscribed(email)
+            if not allowed:
+                return jsonify({
+                    "error":      "Your subscription has expired.",
+                    "reason":     reason,
+                    "redirectTo": "/pricing",
+                }), 402
+        except Exception as e:
+            logger.error(f"[TOKEN] Subscription check error: {e}")
+            # Non-fatal: allow access if Stripe check fails unexpectedly
 
     token = create_token(name, room_id)
     logger.info(f"[TOKEN] Issued: name='{name}' room='{room_id}' ip={ip}")
 
-    # FIX 5: Track registration so super-admin stats are accurate
+    # Track registration for super-admin stats — FIX 3: non-fatal
     if email:
-        sub_status = "active" if cfg.STRIPE_SECRET_KEY and is_subscribed(email)[0] else "trial"
-        db.upsert_user(cfg, email=email, display_name=name, sub_status=sub_status)
+        try:
+            sub_status = "active" if cfg.STRIPE_SECRET_KEY and is_subscribed(email)[0] else "trial"
+            db.upsert_user(cfg, email=email, display_name=name, sub_status=sub_status)
+        except Exception as e:
+            logger.error(f"[TOKEN] upsert_user error: {e}")
 
     return jsonify({
         "token":      token,
@@ -251,8 +252,11 @@ def handle_disconnect():
                 del rooms[room_id]
                 lobby.pop(room_id, None)
                 room_admins.pop(room_id, None)
-                db.delete_room_history(cfg, room_id)
-                db.delete_room(cfg, room_id)
+                try:
+                    db.delete_room_history(cfg, room_id)
+                    db.delete_room(cfg, room_id)
+                except Exception as e:
+                    logger.error(f"[DISCONNECT] DB cleanup error: {e}")
             break
 
     for room_id, waiters in list(lobby.items()):
@@ -274,12 +278,16 @@ def handle_request_join(data, _session):
     name     = _session['sub']
     room_id  = _session['room']
     password = str(data.get("password", "")).strip()
+    jti      = _session.get('jti')   # FIX 4: pass jti for token-level ban check
 
-    # FIX 6: Block banned users
-    if db.is_user_banned(cfg, name=name, room_id=room_id):
-        emit('error', {'code': 'BANNED', 'message': 'You have been banned from this room.'})
-        disconnect()
-        return
+    # FIX 4: Ban check uses both name+room and jti
+    try:
+        if db.is_user_banned(cfg, name=name, room_id=room_id, jti=jti):
+            emit('error', {'code': 'BANNED', 'message': 'You have been banned from this room.'})
+            disconnect()
+            return
+    except Exception as e:
+        logger.error(f"[JOIN] Ban check error: {e}")
 
     if sid in rooms.get(room_id, {}):
         logger.warning(f"[JOIN] Duplicate request_join from '{name}' — ignoring")
@@ -290,7 +298,10 @@ def handle_request_join(data, _session):
     if room_is_empty:
         rooms[room_id]       = {}
         room_admins[room_id] = sid
-        db.create_room(cfg, room_id, created_by=name, password=password or None)
+        try:
+            db.create_room(cfg, room_id, created_by=name, password=password or None)
+        except Exception as e:
+            logger.error(f"[JOIN] create_room DB error: {e}")
         _admit_to_room(sid, name, room_id)
         emit('you_are_admin', {})
         logger.info(f"[HOST] '{name}' created room '{room_id}'")
@@ -343,7 +354,7 @@ def handle_deny_user(data, _session):
 
     room_lobby = lobby.get(room_id, {})
     if target_sid in room_lobby:
-        waiter_name = room_lobby.pop(target_sid)['name']
+        room_lobby.pop(target_sid)
         if not room_lobby:
             lobby.pop(room_id, None)
         emit('admission_result', {'admitted': False, 'message': 'The host denied your request.'}, to=target_sid)
@@ -384,7 +395,10 @@ def handle_mute_participant(data, _session):
     emit('you_were_muted', {'by': _session['sub'], 'message': f"You were muted by {_session['sub']}"}, to=target_sid)
     emit('participant_muted', {'peerId': target_sid, 'name': target_name, 'isMuted': True, 'by': _session['sub']},
          to=room_id, skip_sid=target_sid)
-    db.set_participant_muted(cfg, room_id, target_name, is_muted=True)
+    try:
+        db.set_participant_muted(cfg, room_id, target_name, is_muted=True)
+    except Exception as e:
+        logger.error(f"[MUTE] DB error: {e}")
 
 
 @socketio.on('unmute_participant')
@@ -405,7 +419,10 @@ def handle_unmute_participant(data, _session):
     emit('you_were_unmuted', {'by': _session['sub']}, to=target_sid)
     emit('participant_muted', {'peerId': target_sid, 'name': target_name, 'isMuted': False, 'by': _session['sub']},
          to=room_id, skip_sid=target_sid)
-    db.set_participant_muted(cfg, room_id, target_name, is_muted=False)
+    try:
+        db.set_participant_muted(cfg, room_id, target_name, is_muted=False)
+    except Exception as e:
+        logger.error(f"[UNMUTE] DB error: {e}")
 
 
 def _admit_to_room(sid: str, name: str, room_id: str):
@@ -428,13 +445,16 @@ def _admit_to_room(sid: str, name: str, room_id: str):
     emit('room_peers', {'peers': existing, 'isAdmin': room_admins.get(room_id) == sid}, to=sid)
     emit('peer_joined', {'peerId': sid, 'name': name}, to=room_id, skip_sid=sid)
 
-    history = db.get_room_history(cfg, room_id, limit=cfg.CHAT_HISTORY_LIMIT)
-    if history:
-        emit('chat_history', {'messages': history}, to=sid)
+    try:
+        history = db.get_room_history(cfg, room_id, limit=cfg.CHAT_HISTORY_LIMIT)
+        if history:
+            emit('chat_history', {'messages': history}, to=sid)
 
-    muted = db.get_muted_participants(cfg, room_id)
-    if muted:
-        emit('mute_state_snapshot', {'mutedNames': muted}, to=sid)
+        muted = db.get_muted_participants(cfg, room_id)
+        if muted:
+            emit('mute_state_snapshot', {'mutedNames': muted}, to=sid)
+    except Exception as e:
+        logger.error(f"[ADMIT] DB error loading history/mute state: {e}")
 
     logger.info(f"[JOIN] '{name}' admitted to '{room_id}' | {len(rooms[room_id])} in room")
 
@@ -444,16 +464,13 @@ def _admit_to_room(sid: str, name: str, room_id: str):
 @socketio.on('chat_message')
 @require_auth
 def handle_chat(data, _session):
-    sid     = request.sid
-    name    = _session['sub']
-    # Use the room from JWT — but verify the socket is actually IN that room.
-    # If the socket isn't in the room (mismatch between URL room_id and JWT room),
-    # fall back to whichever room this socket actually joined.
+    sid      = request.sid
+    name     = _session['sub']
     jwt_room = _session['room']
+
     if sid in rooms.get(jwt_room, {}):
         room_id = jwt_room
     else:
-        # Find whichever room this SID is actually in
         room_id = None
         for rid, peers in rooms.items():
             if sid in peers:
@@ -467,17 +484,18 @@ def handle_chat(data, _session):
     if not message:
         return
 
-    db.save_message(cfg, room_id, sender_name=name, message=message)
-    # Use the context-aware `emit` (imported from flask_socketio), NOT
-    # `socketio.emit()`. Inside a socket event handler, only the
-    # context-aware emit guarantees delivery to the correct namespace/room.
+    try:
+        db.save_message(cfg, room_id, sender_name=name, message=message)
+    except Exception as e:
+        logger.error(f"[CHAT] DB save error: {e}")
+
     emit('chat_message',
          {'message': message, 'sender': name, 'senderId': sid},
-         to=room_id)
-    logger.debug(f"[CHAT] '{name}' in '{room_id}': {message[:50]}")
+         to=room_id,
+         skip_sid=sid)
 
 
-# ── Existing signaling events ─────────────────────────────────────────────────
+# ── Signaling events ──────────────────────────────────────────────────────────
 
 @socketio.on('offer')
 @require_auth

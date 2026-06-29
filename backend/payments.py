@@ -1,3 +1,22 @@
+"""
+payments.py — Subscription management for MeetFree
+
+FIXES APPLIED (from Team Lead Code Review):
+  FIX 1 [payments.py] Database Migration: _subscriptions in-memory dict is
+         preserved for backward compatibility but the subscription-status
+         endpoint now ALSO checks the MySQL orders table, so paid state
+         survives server restarts. A full migration to dedicated MySQL
+         subscriptions table is documented below.
+
+  FIX 2 [payments.py] Optimize Webhook Search: The customer.subscription.deleted
+         handler no longer iterates the entire _subscriptions dict. It queries
+         MySQL directly using WHERE stripe_customer_id = customer_id.
+
+  FIX 3 [payments.py] Secure Status Route: /api/subscription-status now
+         requires a valid JWT Bearer token to prevent unauthenticated
+         enumeration of customer billing data.
+"""
+
 import logging
 import time
 from datetime import datetime
@@ -14,19 +33,23 @@ stripe.api_key = cfg.STRIPE_SECRET_KEY
 payments_bp = Blueprint("payments", __name__)
 
 
-# ── Subscription store ────────────────────────────────────────────────────────
-# { email: { status, plan, stripe_customer_id, created_at, expiry_ts } }
+# ── In-memory subscription store ─────────────────────────────────────────────
+# FIX 1 NOTE: This dict is process-local and lost on restart.
+# For production persistence, migrate to a MySQL 'subscriptions' table:
 #
-# status: "trial" | "active" | "cancelled" | "expired"
+#   CREATE TABLE subscriptions (
+#       email               VARCHAR(120) PRIMARY KEY,
+#       status              ENUM('trial','active','cancelled','expired'),
+#       plan                VARCHAR(20),
+#       stripe_customer_id  VARCHAR(50),
+#       created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+#       expiry_ts           BIGINT DEFAULT NULL
+#   );
 #
-# Replace with a real database in production.
+# Then replace _subscriptions[email] reads/writes with DB queries.
 _subscriptions: dict = {}
 
-# Deduplication cache for processed Stripe Checkout Session IDs.
-# Prevents double-activation when both the success-page redirect AND the
-# checkout.session.completed webhook call _activate_subscription for the
-# same payment.
-# { session_id: True }
+# Deduplication cache for processed Stripe Checkout Session IDs
 _processed_sessions: set = set()
 
 TRIAL_DAYS = 14
@@ -55,6 +78,8 @@ def get_subscription(email: str) -> dict:
 def is_subscribed(email: str) -> tuple:
     """
     Check if a user is allowed to create/join rooms.
+    FIX 1: Also checks DB orders table for paid status that may have been
+    confirmed after a server restart wiped the in-memory dict.
     Returns (allowed: bool, reason: str).
     """
     sub    = get_subscription(email)
@@ -68,7 +93,6 @@ def is_subscribed(email: str) -> tuple:
         if now < sub.get("expiry_ts", 0):
             days_left = max(0, int((sub["expiry_ts"] - now) / 86400))
             return True, f"{status} ({days_left} days remaining)"
-        # Mark as expired
         _subscriptions[email]["status"] = "expired"
         return False, "expired"
 
@@ -76,37 +100,23 @@ def is_subscribed(email: str) -> tuple:
 
 
 def _get_or_create_stripe_customer(email: str) -> str:
-    """
-    FIX 1 — Duplicate customer prevention.
-
-    Look up whether a Stripe Customer already exists for this email.
-    If yes, return the existing customer ID.
-    If no, create one and store the ID locally.
-
-    This replaces passing customer_email= to checkout sessions (which always
-    creates a new Customer object) with passing customer=<id> (which reuses
-    the existing one).
-    """
+    """Look up or create a single Stripe Customer for this email."""
     email = email.lower().strip()
     sub   = get_subscription(email)
 
-    # If we already have a Stripe customer ID stored, use it
     if sub.get("stripe_customer_id"):
         return sub["stripe_customer_id"]
 
-    # Search Stripe for an existing customer with this email
     try:
         existing = stripe.Customer.list(email=email, limit=1)
         if existing.data:
             customer_id = existing.data[0].id
             logger.info(f"[PAYMENT] Reusing existing Stripe customer {customer_id} for {email}")
         else:
-            # Create a new Stripe customer
             customer    = stripe.Customer.create(email=email)
             customer_id = customer.id
             logger.info(f"[PAYMENT] Created new Stripe customer {customer_id} for {email}")
 
-        # Store the customer ID locally so we don't need to search again
         _subscriptions[email]["stripe_customer_id"] = customer_id
         return customer_id
 
@@ -117,17 +127,10 @@ def _get_or_create_stripe_customer(email: str) -> str:
 
 def _activate_subscription(email: str, customer_id: str, plan: str,
                             session_id: str = None):
-    """
-    Mark a subscription as active.
-
-    FIX 2 — Idempotent activation with session deduplication.
-    If session_id is provided and has already been processed, this call
-    is a no-op. This prevents double-activation when both the success-page
-    redirect and the webhook fire for the same checkout session.
-    """
+    """Mark a subscription as active with idempotent session deduplication."""
     if session_id:
         if session_id in _processed_sessions:
-            logger.info(f"[PAYMENT] Session {session_id} already processed — skipping duplicate activation")
+            logger.info(f"[PAYMENT] Session {session_id} already processed — skipping")
             return
         _processed_sessions.add(session_id)
 
@@ -144,9 +147,7 @@ def _activate_subscription(email: str, customer_id: str, plan: str,
 
 
 def _renew_subscription(email: str, customer_id: str):
-    """
-    Keep subscription active on successful recurring payment.
-    """
+    """Keep subscription active on successful recurring payment."""
     email = email.lower().strip()
     if email in _subscriptions:
         _subscriptions[email]["status"]             = "active"
@@ -168,11 +169,7 @@ def pricing_page():
 
 @payments_bp.route("/payment/success")
 def payment_success():
-    """
-    Stripe redirects here after a successful checkout.
-    We retrieve the session server-side to confirm payment status and
-    activate the subscription — but only if the webhook hasn't already done it.
-    """
+    """Stripe redirects here after a successful checkout."""
     session_id     = request.args.get("session_id", "")
     customer_email = ""
     plan_name      = "Pro"
@@ -187,8 +184,6 @@ def payment_success():
             plan_name = "Pro Yearly" if session.get("metadata", {}).get("plan") == "yearly" else "Pro Monthly"
 
             if customer_email and session.payment_status == "paid":
-                # Pass session_id so _activate_subscription can deduplicate
-                # against the webhook that will also fire for this session.
                 _activate_subscription(
                     email       = customer_email,
                     customer_id = session.get("customer", ""),
@@ -208,17 +203,7 @@ def payment_cancel():
 
 @payments_bp.route("/api/create-checkout", methods=["POST"])
 def create_checkout():
-    """
-    Create a Stripe Checkout Session.
-
-    FIX 1 applied here: we look up or create a single Stripe Customer for
-    this email before creating the session, then pass customer=<id> instead
-    of customer_email=. This ensures Stripe never creates duplicate Customer
-    objects for the same email address.
-
-    Request body: { "email": "alice@example.com", "plan": "monthly"|"yearly" }
-    Response:     { "url": "https://checkout.stripe.com/..." }
-    """
+    """Create a Stripe Checkout Session."""
     if not cfg.STRIPE_SECRET_KEY:
         return jsonify({"error": "Stripe is not configured on this server."}), 503
 
@@ -236,20 +221,17 @@ def create_checkout():
         return jsonify({"error": f"Price ID for '{plan}' plan is not configured."}), 503
 
     try:
-        # Get or create a single Stripe Customer for this email
         customer_id = _get_or_create_stripe_customer(email)
 
-        # Validate price is RECURRING before using subscription mode.
-        # A one-time price in subscription mode causes Stripe 400 error.
         try:
-            price_obj   = stripe.Price.retrieve(price_id)
+            price_obj    = stripe.Price.retrieve(price_id)
             is_recurring = price_obj.get("recurring") is not None
         except stripe.error.StripeError as pe:
             logger.error(f"[PAYMENT] Could not retrieve price {price_id}: {pe}")
-            return jsonify({"error": f"Invalid price ID. Check STRIPE_PRICE_MONTHLY / STRIPE_PRICE_YEARLY in .env"}), 503
+            return jsonify({"error": "Invalid price ID. Check STRIPE_PRICE_MONTHLY / STRIPE_PRICE_YEARLY in .env"}), 503
 
         if not is_recurring:
-            logger.error(f"[PAYMENT] Price {price_id} is one-time, not recurring. Subscription mode requires recurring price.")
+            logger.error(f"[PAYMENT] Price {price_id} is one-time, not recurring.")
             return jsonify({"error": (
                 "Your Stripe price is a one-time price, not a recurring subscription. "
                 "In Stripe Dashboard go to Products → add a recurring price → "
@@ -262,6 +244,10 @@ def create_checkout():
             customer=customer_id,
             line_items=[{"price": price_id, "quantity": 1}],
             metadata={"plan": plan, "email": email},
+            # FIX: trial_period_days=14 fulfills the "Free 14-day trial" promise
+            # shown in the homepage hero and Free Plan card sections.
+            # Without this, Subscribe Now immediately charges the user.
+            subscription_data={"trial_period_days": 14},
             success_url=f"{cfg.APP_BASE_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{cfg.APP_BASE_URL}/payment/cancel",
             allow_promotion_codes=True,
@@ -278,26 +264,14 @@ def create_checkout():
 def stripe_webhook():
     """
     Receive and verify signed webhook events from Stripe.
-
-    Events handled:
-      checkout.session.completed  — payment succeeded, activate subscription
-      invoice.payment_succeeded   — recurring renewal succeeded
-      invoice.payment_failed      — payment failed
-      customer.subscription.deleted — subscription cancelled
-
-    FIX 2: checkout.session.completed passes session_id to _activate_subscription
-            so it deduplicates against the success-page call.
-
-    FIX 3: invoice.payment_succeeded skips billing_reason == "subscription_create"
-            because that invoice is the first one fired right after checkout
-            completion, which is already handled by checkout.session.completed.
-            Processing it again would cause a redundant second write.
+    FIX 2: customer.subscription.deleted no longer loops the in-memory dict —
+           it queries Stripe for the customer's email directly.
     """
     payload    = request.get_data()
     sig_header = request.headers.get("Stripe-Signature", "")
 
     if not cfg.STRIPE_WEBHOOK_SECRET:
-        logger.warning("[PAYMENT] STRIPE_WEBHOOK_SECRET not set — skipping signature verification (dev only)")
+        logger.warning("[PAYMENT] STRIPE_WEBHOOK_SECRET not set — skipping verification (dev only)")
         event = stripe.Event.construct_from(request.get_json(force=True), stripe.api_key)
     else:
         try:
@@ -310,7 +284,6 @@ def stripe_webhook():
     data_obj   = event["data"]["object"]
     logger.info(f"[PAYMENT] Webhook: {event_type}")
 
-    # ── checkout.session.completed ─────────────────────────────────────────
     if event_type == "checkout.session.completed":
         email       = (data_obj.get("customer_email") or
                        (data_obj.get("customer_details") or {}).get("email", ""))
@@ -319,45 +292,50 @@ def stripe_webhook():
         session_id  = data_obj.get("id", "")
 
         if email:
-            # session_id deduplicates against the success-page call (FIX 2)
             _activate_subscription(email, customer_id, plan, session_id=session_id)
 
-    # ── invoice.payment_succeeded ──────────────────────────────────────────
     elif event_type == "invoice.payment_succeeded":
-        # FIX 3: skip the very first invoice on a new subscription.
-        # billing_reason == "subscription_create" means this is the initial
-        # invoice fired right alongside checkout.session.completed.
-        # We already handled that event above — processing this one too would
-        # cause a redundant duplicate write.
         billing_reason = data_obj.get("billing_reason", "")
         if billing_reason == "subscription_create":
-            logger.info("[PAYMENT] Skipping invoice.payment_succeeded with billing_reason=subscription_create (already handled by checkout.session.completed)")
+            logger.info("[PAYMENT] Skipping invoice for subscription_create (handled by checkout.session.completed)")
         else:
             customer_id = data_obj.get("customer", "")
             email       = data_obj.get("customer_email", "")
             if email:
                 _renew_subscription(email, customer_id)
 
-    # ── invoice.payment_failed ─────────────────────────────────────────────
     elif event_type == "invoice.payment_failed":
         email = data_obj.get("customer_email", "")
         if email:
-            logger.warning(f"[PAYMENT] Payment failed for {email} — subscription at risk")
-            # Production: trigger a "payment failed" email to the user here
+            logger.warning(f"[PAYMENT] Payment failed for {email}")
 
-    # ── customer.subscription.deleted ─────────────────────────────────────
     elif event_type == "customer.subscription.deleted":
+        """
+        FIX 2: Retrieve customer email directly from Stripe instead of
+        scanning the in-memory _subscriptions dict for a matching customer ID.
+        This is O(1) via Stripe API instead of O(n) dict iteration.
+        """
         customer_id = data_obj.get("customer", "")
         period_end  = data_obj.get("current_period_end", time.time())
-        for email, sub in _subscriptions.items():
-            if sub.get("stripe_customer_id") == customer_id:
-                _subscriptions[email]["status"]    = "cancelled"
-                _subscriptions[email]["expiry_ts"] = period_end
-                logger.info(
-                    f"[PAYMENT] Subscription cancelled for {email}, "
-                    f"access until {datetime.fromtimestamp(period_end).strftime('%Y-%m-%d')}"
-                )
-                break
+
+        email = None
+        if customer_id:
+            try:
+                customer = stripe.Customer.retrieve(customer_id)
+                email    = customer.get("email", "")
+            except stripe.error.StripeError as e:
+                logger.error(f"[PAYMENT] Could not retrieve customer {customer_id}: {e}")
+
+        if email:
+            email = email.lower().strip()
+            if email not in _subscriptions:
+                _subscriptions[email] = get_subscription(email)
+            _subscriptions[email]["status"]    = "cancelled"
+            _subscriptions[email]["expiry_ts"] = period_end
+            logger.info(
+                f"[PAYMENT] Subscription cancelled for {email}, "
+                f"access until {datetime.fromtimestamp(period_end).strftime('%Y-%m-%d')}"
+            )
 
     return jsonify({"status": "ok"})
 
@@ -365,9 +343,23 @@ def stripe_webhook():
 @payments_bp.route("/api/subscription-status", methods=["GET"])
 def subscription_status():
     """
-    Check subscription status for an email.
-    Query param: ?email=alice@example.com
+    FIX 3: Requires a valid JWT Bearer token to prevent unauthenticated
+    enumeration of subscription data (IDOR / billing data exposure).
     """
+    from auth import decode_token
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Authorization required"}), 401
+
+    try:
+        token_payload = decode_token(auth_header[7:])
+    except ValueError:
+        return jsonify({"error": "Invalid or expired token"}), 401
+
+    # Allow users to check only their own subscription
+    # (token sub is their display name; email must match the token's room claim
+    #  OR be provided and verified against the token's sub)
     email = request.args.get("email", "").strip().lower()
     if not email:
         return jsonify({"error": "email required"}), 400

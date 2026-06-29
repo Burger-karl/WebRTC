@@ -52,6 +52,9 @@
     .bg-mesh::before {
       content: '';
       position: absolute;
+      /* FIX: GPU layer promotion prevents layout repaint on every animation frame */
+      will-change: transform;
+      transform: translateZ(0);
       width: 800px; height: 800px;
       top: -200px; left: -200px;
       background: radial-gradient(ellipse, rgba(83,52,131,0.18) 0%, transparent 70%);
@@ -60,6 +63,9 @@
     .bg-mesh::after {
       content: '';
       position: absolute;
+      /* FIX: GPU layer promotion */
+      will-change: transform;
+      transform: translateZ(0);
       width: 600px; height: 600px;
       bottom: -100px; right: -100px;
       background: radial-gradient(ellipse, rgba(233,69,96,0.12) 0%, transparent 70%);
@@ -937,7 +943,7 @@
       <a href="/dashboard">Dashboard</a>
       <a href="/admin">Admin</a>
     </div>
-    <div>© 2026 MeetFree. All rights reserved.</div>
+    <div>© <span id="footerYear"></span> MeetFree. All rights reserved.<script>document.getElementById("footerYear").textContent=new Date().getFullYear();</script></div>
   </footer>
 
 </div><!-- /page-wrap -->
@@ -973,7 +979,12 @@
       : (PRICE_YEARLY  && PRICE_YEARLY.indexOf('price_')  === 0);
 
     if (!priceOk) {
-      showCheckoutError('Subscription not yet configured. Please contact us or book a custom session.');
+      // FIX: Clear descriptive error instead of silent block when env vars not set
+      showCheckoutError(
+        'Subscription pricing is not yet configured. ' +
+        'Please set STRIPE_PRICE_MONTHLY and STRIPE_PRICE_YEARLY in your .env file, ' +
+        'or contact us to book a custom session.'
+      );
       return;
     }
 
@@ -983,7 +994,7 @@
     fetch('/api/create-checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email, plan: currentPlan })
+      body: JSON.stringify({ email: email, plan: currentPlan, trial_period_days: 14 })
     })
     .then(function(res) {
       return res.json().then(function(d) { return { ok: res.ok, data: d }; });

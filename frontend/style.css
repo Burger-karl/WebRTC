@@ -105,6 +105,14 @@ h1 {
   z-index: 1000;
 }
 
+/* FIX: Strict z-index layer ordering for overlay hierarchies.
+   Critical auth/ban screens must always sit above lobby/pre-call modals
+   so a fast socket update cannot trap the user behind an unresponsive overlay. */
+#authGuard    { z-index: 2200; }
+#deniedScreen { z-index: 2100; }
+#lobbyScreen  { z-index: 1600; }
+#preCallModal { z-index: 1500; }
+
 .modal {
   background: var(--bg2); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 2rem;
@@ -900,8 +908,10 @@ input:checked + .toggle-slider:before { transform: translateX(20px); }
 
 /* Table controls */
 .admin-table-header {
-  display: flex; align-items: flex-start; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between;
   flex-wrap: wrap; gap: 12px; margin-bottom: 1rem;
+  /* FIX: align-items:center prevents staggered misalignment when items
+     wrap on mid-sized viewports (search bar vs static text labels) */
 }
 .table-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .admin-search {
@@ -917,6 +927,9 @@ input:checked + .toggle-slider:before { transform: translateX(20px); }
 .admin-table {
   width: 100%; border-collapse: collapse;
   background: var(--surface2); font-size: .85rem;
+  /* FIX: min-width prevents header/cell crushing on small screens;
+     .admin-table-wrap overflow-x:auto handles horizontal panning */
+  min-width: 650px;
 }
 .admin-table th {
   padding: 10px 14px; text-align: left; font-weight: 700;
@@ -933,9 +946,17 @@ input:checked + .toggle-slider:before { transform: translateX(20px); }
 .table-loading { text-align: center; color: var(--text-muted); padding: 2rem !important; }
 
 .td-num   { color: var(--text-muted); width: 40px; }
-.td-email { font-size: .78rem; color: var(--text-muted); }
+.td-email {
+  font-size: .78rem; color: var(--text-muted);
+  /* FIX: Long corporate emails break table layout without word-break */
+  word-break: break-all; max-width: 180px;
+}
 .td-date  { font-size: .78rem; color: var(--text-muted); white-space: nowrap; }
-.td-txn   { font-family: monospace; font-size: .78rem; }
+.td-txn   {
+  font-family: monospace; font-size: .78rem;
+  /* FIX: Long Stripe transaction hashes (ch_xxx...) overflow narrow columns */
+  word-break: break-all; max-width: 180px;
+}
 .txn-id   { cursor: help; color: var(--accent2); }
 .room-link {
   font-family: monospace; font-size: .78rem; color: var(--accent2);

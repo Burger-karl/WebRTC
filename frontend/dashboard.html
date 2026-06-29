@@ -28,7 +28,7 @@
       <div class="form-group">
         <label for="lookupEmail">Enter your email to view your orders</label>
         <div class="lookup-row">
-          <input type="email" id="lookupEmail" placeholder="alice@example.com"
+          <input type="email" id="lookupEmail" oninput="document.getElementById('emailLookup').style.opacity='1'" placeholder="alice@example.com"
                  maxlength="120" autocomplete="email"
                  onkeydown="if(event.key==='Enter') loadOrders()"/>
           <button class="order-btn primary-btn" onclick="loadOrders()" id="lookupBtn">
@@ -103,7 +103,11 @@
       setLookupLoading(true);
 
       try {
-        const res  = await fetch(`/api/my-orders?email=${encodeURIComponent(email)}`);
+        const res  = await fetch(`/api/my-orders?email=${encodeURIComponent(email)}`, {
+          headers: {
+            'Authorization': 'Bearer ' + (sessionStorage.getItem('meetfree_token') || '')
+          }
+        });
         const data = await res.json();
 
         if (!res.ok) {

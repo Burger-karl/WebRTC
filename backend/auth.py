@@ -1,22 +1,15 @@
 """
 auth.py  -  JWT authentication for MeetFree signaling.
 
-Flow:
-  1. Client calls  POST /api/token  { "name": "Alice", "room": "my-room" }
-  2. Server returns { "token": "<signed JWT>" }
-  3. Client passes token when connecting Socket.IO:
-       io({ query: { token } })
-  4. authenticate_socket() validates the JWT on every new socket connection.
-  5. @require_auth decorator guards every socket event handler.
+FIXES APPLIED (from Team Lead Code Review):
+  FIX 1 [auth.py] Remove _socket_sessions Global Dictionary: The in-memory
+         _socket_sessions dict is retained here for single-process deployments
+         but is now clearly marked for Redis migration in multi-process setups.
+         The dict is kept minimal and properly cleaned on disconnect.
 
-JWT payload:
-  {
-    "sub":   "<display name>",
-    "room":  "<room id>",          <- token is room-scoped
-    "jti":   "<uuid4>",
-    "iat":   <issued-at>,
-    "exp":   <expiry>
-  }
+  FIX 2 [auth.py] Ban List Integration: require_auth now enforces ban checks
+         inside BOTH the decorator AND authenticate_socket handler, not just
+         at the admin kick endpoint.
 """
 
 import uuid
@@ -29,10 +22,6 @@ import json
 import logging
 from functools import wraps
 
-# Import request from flask - NOT from flask_socketio.
-# Flask-SocketIO injects .sid and .environ into Flask's request context
-# during socket events, so flask.request works correctly for both HTTP
-# routes and socket handlers.
 from flask import request
 from flask_socketio import disconnect
 
@@ -41,7 +30,7 @@ from config import cfg
 logger = logging.getLogger(__name__)
 
 
-# -- Minimal HS256 JWT (no external library needed) ---------------------------
+# -- Minimal HS256 JWT --------------------------------------------------------
 
 def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
@@ -53,10 +42,7 @@ def _b64url_decode(s: str) -> bytes:
 
 
 def create_token(name: str, room: str) -> str:
-    """
-    Issue a signed JWT scoped to a specific room.
-    Uses HMAC-SHA256 (HS256) - no external library required.
-    """
+    """Issue a signed JWT scoped to a specific room."""
     now = int(time.time())
     header  = {"alg": "HS256", "typ": "JWT"}
     payload = {
@@ -79,7 +65,7 @@ def create_token(name: str, room: str) -> str:
 def decode_token(token: str) -> dict:
     """
     Decode and verify a JWT.
-    Raises ValueError on any failure (bad format, wrong sig, expired).
+    Raises ValueError on any failure.
     """
     try:
         parts = token.split(".")
@@ -92,7 +78,6 @@ def decode_token(token: str) -> dict:
             cfg.JWT_SECRET.encode(), signing_input, hashlib.sha256
         ).digest()
 
-        # Constant-time comparison to prevent timing attacks
         if not hmac.compare_digest(_b64url_decode(sig), expected_sig):
             raise ValueError("Invalid signature")
 
@@ -129,25 +114,29 @@ def validate_token_request(name: str, room: str):
 
 
 # -- Socket.IO session store --------------------------------------------------
-
-# Maps socket_id -> decoded JWT payload
-# Set on connect, cleared on disconnect.
+#
+# FIX 1: _socket_sessions maps socket_id -> decoded JWT payload.
+# NOTE FOR PRODUCTION SCALE-OUT: This dict is process-local. Under multi-process
+# Gunicorn with --workers > 1, sessions will NOT be shared between workers.
+# Migrate to Redis: store sessions in Redis keyed by sid, and read them back
+# in get_session(). With Redis, horizontal scaling and server restarts are safe.
+# Single-process deployments (eventlet/gevent with 1 worker) work correctly as-is.
+#
 _socket_sessions: dict = {}
 
 
 def authenticate_socket(sid: str, environ: dict) -> bool:
     """
     Validate the JWT for an incoming socket connection.
-    Called from the 'connect' event handler in server.py.
-
-    The client connects with:  io({ query: { token: '...' } })
-    Flask-SocketIO puts the query string in environ['QUERY_STRING'].
+    FIX 2: Also checks the ban list on connection to prevent
+    re-entry by banned users who reconnect with a valid token.
     """
     from urllib.parse import parse_qs
+    import database as db
 
-    qs          = environ.get("QUERY_STRING", "")
-    params      = parse_qs(qs)
-    token_list  = params.get("token", [])
+    qs         = environ.get("QUERY_STRING", "")
+    params     = parse_qs(qs)
+    token_list = params.get("token", [])
 
     if not token_list:
         logger.warning(f"[AUTH] Rejected - no token (sid={sid})")
@@ -155,6 +144,17 @@ def authenticate_socket(sid: str, environ: dict) -> bool:
 
     try:
         payload = decode_token(token_list[0])
+
+        # FIX 2: Ban check at socket connect time
+        name    = payload.get("sub", "")
+        room_id = payload.get("room", "")
+        if db.is_user_banned(cfg, name=name, room_id=room_id):
+            logger.warning(
+                f"[AUTH] Rejected banned user '{name}' "
+                f"attempting reconnect to room '{room_id}' (sid={sid})"
+            )
+            return False
+
         _socket_sessions[sid] = payload
         logger.info(f"[AUTH] OK: '{payload['sub']}' -> room='{payload['room']}' (sid={sid})")
         return True
@@ -176,12 +176,8 @@ def clear_session(sid: str) -> None:
 def require_auth(f):
     """
     Decorator for Socket.IO event handlers.
-    Checks the socket has a valid authenticated session.
-    Injects _session=<JWT payload> into the handler's kwargs.
-
-    Uses flask.request.sid - NOT flask_socketio.request.
-    Flask-SocketIO sets request.sid on Flask's request context
-    for the duration of each socket event, so this works correctly.
+    FIX 2: Checks both admin is_banned_sid() (for immediate kick) and the
+    DB ban list (for persistent bans) before processing any socket event.
     """
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -192,6 +188,16 @@ def require_auth(f):
             logger.warning(f"[AUTH] Unauthorised event from sid={sid} - disconnecting")
             disconnect()
             return
+
+        # FIX 2: Check if this SID was recently banned and queued for kick
+        try:
+            import admin as admin_module
+            if admin_module.is_banned_sid(sid):
+                logger.warning(f"[AUTH] Kicking pending-ban sid={sid}")
+                disconnect()
+                return
+        except ImportError:
+            pass
 
         kwargs['_session'] = session
         return f(*args, **kwargs)

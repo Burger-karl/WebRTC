@@ -318,17 +318,21 @@
     _refreshTimer = setInterval(refreshAll, 15000);
   }
 
+  // FIX: Sequential async chain instead of 5 simultaneous fetches every 15s.
+  // Parallel firing saturates the browser connection pool and creates a DoS
+  // profile against admin API endpoints on slow connections.
   function refreshAll() {
-    loadStats();
-    loadMetrics();
-    loadRooms();
-    loadOrders();
-    loadRoomAdmins();
+    loadStats()
+      .then(function() { return loadMetrics(); })
+      .then(function() { return loadRooms();   })
+      .then(function() { return loadOrders();  })
+      .then(function() { return loadRoomAdmins(); })
+      .catch(function(e) { console.error('[refreshAll] chain error', e); });
   }
 
   // ── Stats ──────────────────────────────────────────────────────────────────
   function loadStats() {
-    apiFetch('/api/admin/stats')
+    return apiFetch('/api/admin/stats')
     .then(function(res) { return res.json(); })
     .then(function(data) {
       document.getElementById('statRooms').textContent      = data.active_rooms      != null ? data.active_rooms      : '0';
@@ -341,7 +345,7 @@
 
   // ── Metrics ────────────────────────────────────────────────────────────────
   function loadMetrics() {
-    apiFetch('/api/admin/system')
+    return apiFetch('/api/admin/system')
     .then(function(res) { return res.json(); })
     .then(function(data) {
       document.getElementById('mCpu').textContent     = data.cpu_percent         != null ? data.cpu_percent.toFixed(1) + '%' : '—';
@@ -356,47 +360,67 @@
   }
 
   // ── Active Rooms ───────────────────────────────────────────────────────────
+  // FIX XSS: Uses DOM createElement + data-binding closures instead of
+  // string-interpolated onclick attributes. esc() does not prevent quote-breakout
+  // inside HTML event handler attribute strings.
   function loadRooms() {
-    apiFetch('/api/admin/rooms')
+    return apiFetch('/api/admin/rooms')
     .then(function(res) { return res.json(); })
     .then(function(data) {
       var el   = document.getElementById('roomsList');
       var list = data.rooms || [];
       document.getElementById('roomsUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      el.innerHTML = '';
 
       if (!list.length) {
         el.innerHTML = '<div class="no-data">No active rooms right now</div>';
         return;
       }
 
-      var html = '';
       for (var i = 0; i < list.length; i++) {
         var room  = list[i];
-        var pills = '';
         var users = room.users || [];
+
+        var card = document.createElement('div');
+        card.className = 'room-card';
+
+        var header = document.createElement('div');
+        header.className = 'room-card-header';
+        var info = document.createElement('div');
+        var roomIdEl = document.createElement('div');
+        roomIdEl.className   = 'room-id';
+        roomIdEl.textContent = '\uD83D\uDEAA ' + room.room_id;
+        var roomMeta = document.createElement('div');
+        roomMeta.className   = 'room-meta';
+        roomMeta.textContent = room.user_count + ' user' + (room.user_count !== 1 ? 's' : '');
+        info.appendChild(roomIdEl);
+        info.appendChild(roomMeta);
+        header.appendChild(info);
+        card.appendChild(header);
+
+        var usersList = document.createElement('div');
+        usersList.className = 'users-list';
+
         for (var j = 0; j < users.length; j++) {
-          var u = users[j];
-          pills +=
-            '<span class="user-pill ' + (u.is_host ? 'host' : '') + '">' +
-              (u.is_host ? '&#x1F451; ' : '') +
-              esc(u.name) +
-              ' <button onclick="banUser(\'' + esc(u.sid) + '\',\'' + esc(u.name) + '\')" ' +
-                'style="background:none;border:none;cursor:pointer;color:var(--admin-danger);font-size:.8rem;" ' +
-                'title="Ban">&#x2715;</button>' +
-            '</span>';
+          var u    = users[j];
+          var pill = document.createElement('span');
+          pill.className = 'user-pill' + (u.is_host ? ' host' : '');
+          pill.appendChild(document.createTextNode((u.is_host ? '\uD83D\uDC51 ' : '') + u.name + ' '));
+
+          var btn = document.createElement('button');
+          btn.textContent    = '\u2715';
+          btn.title          = 'Ban';
+          btn.style.cssText  = 'background:none;border:none;cursor:pointer;color:var(--admin-danger);font-size:.8rem;';
+          (function(sid, name) {
+            btn.onclick = function() { banUser(sid, name); };
+          })(u.sid, u.name);
+
+          pill.appendChild(btn);
+          usersList.appendChild(pill);
         }
-        html +=
-          '<div class="room-card">' +
-            '<div class="room-card-header">' +
-              '<div>' +
-                '<div class="room-id">&#x1F6AA; ' + esc(room.room_id) + '</div>' +
-                '<div class="room-meta">' + room.user_count + ' user' + (room.user_count !== 1 ? 's' : '') + '</div>' +
-              '</div>' +
-            '</div>' +
-            '<div class="users-list">' + pills + '</div>' +
-          '</div>';
+        card.appendChild(usersList);
+        el.appendChild(card);
       }
-      el.innerHTML = html;
     })
     .catch(function(e) { console.error('Rooms error', e); });
   }
@@ -453,7 +477,7 @@
 
   // ── Room Admins ────────────────────────────────────────────────────────────
   function loadRoomAdmins() {
-    apiFetch('/api/admin/room-admins')
+    return apiFetch('/api/admin/room-admins')
     .then(function(res) { return res.json(); })
     .then(function(data) {
       var tbody = document.getElementById('roomAdminsBody');

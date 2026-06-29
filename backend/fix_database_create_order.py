@@ -1,83 +1,139 @@
 """
-Run this script from your backend/ folder:
-    python fix_database_create_order.py
+fix_database_create_order.py — Database migration / repair utility for orders table.
 
-It finds and fixes the create_order() function in database.py to remove
-the unexpected 'room_id' parameter that is causing the booking error.
+FIXES APPLIED (from Team Lead Code Review):
+  FIX 1 [fix_database_create_order.py] Database Query Regression: A previous
+         version of this script stripped room_id and meeting_link from the INSERT
+         query in database.py. This script verifies those columns exist in the
+         orders table and re-adds them if missing, restoring full data integrity.
 """
-import re, os, sys, shutil
-from datetime import datetime
 
-db_path = os.path.join(os.path.dirname(__file__), 'database.py')
-if not os.path.exists(db_path):
-    print(f"ERROR: database.py not found at {db_path}")
-    sys.exit(1)
+import sys
+import logging
 
-with open(db_path, 'r', encoding='utf-8') as f:
-    content = f.read()
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
-# Check what signature is currently in the file
-match = re.search(r'def create_order\([^)]+\)', content)
-if match:
-    print(f"Current create_order signature:\n  {match.group()}\n")
-else:
-    print("ERROR: Could not find create_order in database.py")
-    sys.exit(1)
 
-# If room_id is in the signature, fix it
-if 'room_id' in match.group():
-    print("Found bad signature with room_id — fixing...")
+def _check_and_fix_orders_table(conn, cursor):
+    """
+    FIX 1: Ensure orders table has room_id and meeting_link columns.
+    These were erroneously removed in a previous fix script iteration.
+    Uses conditional ADD only — safe to re-run repeatedly.
+    """
+    # Check which columns currently exist
+    cursor.execute("""
+        SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME   = 'orders'
+    """)
+    existing_cols = {row['COLUMN_NAME'] for row in cursor.fetchall()}
 
-    # Backup first
-    backup = db_path + f'.backup_{datetime.now().strftime("%H%M%S")}'
-    shutil.copy(db_path, backup)
-    print(f"Backup saved: {backup}")
+    missing = []
+    if 'room_id' not in existing_cols:
+        missing.append('room_id')
+    if 'meeting_link' not in existing_cols:
+        missing.append('meeting_link')
 
-    # Replace the entire create_order function
-    old_pattern = r'def create_order\(cfg[^)]*room_id[^)]*\).*?(?=\ndef |\Z)'
-    new_func = '''def create_order(cfg, client_name: str, client_email: str, service_type: str,
-                 requirements: str, budget: str, stripe_session_id: str):
-    """Create a pending order record before Stripe payment."""
-    import pymysql
-    if not _db_available:
-        return None
-    conn = None
+    if not missing:
+        logger.info("✅  orders table already has room_id and meeting_link — no changes needed.")
+        return True
+
+    logger.warning(f"⚠️  Missing columns in orders table: {missing}")
+
+    for col in missing:
+        if col == 'room_id':
+            cursor.execute("""
+                ALTER TABLE orders
+                ADD COLUMN room_id VARCHAR(80) DEFAULT NULL
+                AFTER stripe_transaction_id
+            """)
+            logger.info("  ✅  Added column: room_id")
+        elif col == 'meeting_link':
+            cursor.execute("""
+                ALTER TABLE orders
+                ADD COLUMN meeting_link VARCHAR(300) DEFAULT NULL
+                AFTER room_id
+            """)
+            logger.info("  ✅  Added column: meeting_link")
+
+    conn.commit()
+    logger.info("Migration complete — orders table now has room_id and meeting_link.")
+    return True
+
+
+def _verify_create_order_function():
+    """
+    Verify that database.py's create_order() includes room_id and meeting_link
+    in the INSERT statement. This is a static code inspection check.
+    """
     try:
-        conn = _get_conn(cfg)
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO orders
-                    (client_name, client_email, service_type, requirements,
-                     budget, stripe_session_id, payment_status)
-                VALUES (%s, %s, %s, %s, %s, %s, 'pending')
-            """, (
-                client_name[:100],
-                client_email[:120].lower(),
-                service_type[:100],
-                requirements[:5000],
-                budget[:50] if budget else None,
-                stripe_session_id[:200],
-            ))
-        conn.commit()
-        return conn.insert_id()
+        import ast, inspect
+        import database
+        source = inspect.getsource(database.create_order)
+        if 'room_id' in source and 'meeting_link' in source:
+            logger.info("✅  database.create_order() includes room_id and meeting_link ✓")
+            return True
+        else:
+            logger.error(
+                "❌  database.create_order() is MISSING room_id or meeting_link!\n"
+                "    This is the regression — the INSERT query must include both columns.\n"
+                "    Replace database.py with the fixed version from this repository."
+            )
+            return False
     except Exception as e:
-        logger.error(f"[BOOKING] create_order error: {e}")
-        if conn:
-            try: conn.rollback()
-            except: pass
+        logger.warning(f"Could not inspect database.create_order(): {e}")
         return None
-    finally:
-        if conn:
-            _return_conn(conn)
 
-'''
-    content = re.sub(old_pattern, new_func, content, flags=re.DOTALL)
-    with open(db_path, 'w', encoding='utf-8') as f:
-        f.write(content)
-    print("✓ database.py fixed successfully!")
-    print("\nRestart your server: python server.py")
-else:
-    print("✓ create_order signature is already correct — no fix needed.")
-    print("  The issue may be a cached .pyc file. Try:")
-    print("  1. Delete backend/__pycache__/ folder")
-    print("  2. Restart server: python server.py")
+
+def main():
+    print("=" * 60)
+    print("  MeetFree — Fix Orders Table Migration")
+    print("=" * 60)
+
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from config import cfg
+    except ImportError as e:
+        print(f"ERROR: Could not load config: {e}")
+        sys.exit(1)
+
+    if not cfg.MYSQL_ENABLED:
+        print("MySQL is disabled (MYSQL_ENABLED=false) — nothing to do.")
+        sys.exit(0)
+
+    # Step 1: Verify the Python code is correct
+    print("\n[Step 1] Checking database.py create_order() function…")
+    code_ok = _verify_create_order_function()
+
+    # Step 2: Fix the database schema
+    print("\n[Step 2] Checking orders table schema…")
+    try:
+        import pymysql
+        conn = pymysql.connect(
+            host=cfg.MYSQL_HOST, port=cfg.MYSQL_PORT,
+            user=cfg.MYSQL_USER, password=cfg.MYSQL_PASSWORD,
+            database=cfg.MYSQL_DATABASE, charset="utf8mb4",
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+        with conn.cursor() as cursor:
+            _check_and_fix_orders_table(conn, cursor)
+        conn.close()
+    except Exception as e:
+        print(f"\nERROR connecting to database: {e}")
+        sys.exit(1)
+
+    print("\n" + "=" * 60)
+    if code_ok is False:
+        print("⚠️  ACTION REQUIRED: Replace database.py with the fixed version.")
+        print("   The orders INSERT query must include room_id and meeting_link.")
+        sys.exit(1)
+    else:
+        print("✅  All checks passed. Orders table is correctly configured.")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()

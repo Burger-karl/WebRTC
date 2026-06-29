@@ -224,8 +224,15 @@
       const expEl = document.getElementById('subExpiry');
       const stEl  = document.getElementById('subStatus');
       if (data.subscription_expires_at) {
-        const expDate = new Date(data.subscription_expires_at);
-        const now     = new Date();
+        const expDate  = new Date(data.subscription_expires_at);
+        const now      = new Date();
+        // FIX: Guard against malformed date strings producing NaN which breaks
+        // the daysLeft calculation and freezes the UI update
+        if (!data.subscription_expires_at || isNaN(Date.parse(data.subscription_expires_at))) {
+          expEl.textContent = 'Unknown';
+          stEl.textContent  = 'Unknown';
+          return;
+        }
         const daysLeft = Math.ceil((expDate - now) / 86400000);
         expEl.textContent = expDate.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
         if (daysLeft < 0) {
@@ -280,6 +287,9 @@
   }
 
   // Auto-login if session token exists
+  // FIX: Only clear sessionStorage on explicit auth failure (401/403).
+  // A transient network timeout should NOT log the user out — that is too aggressive
+  // and causes false logouts on brief connection stutters.
   (async function() {
     if (_token && _roomId) {
       try {
@@ -288,10 +298,18 @@
           const d = await res.json();
           if (d.role === 'room_admin') { showDashboard(d.email); return; }
         }
-      } catch(e) {}
-      sessionStorage.removeItem('ra_token');
-      sessionStorage.removeItem('ra_room');
-      _token = ''; _roomId = '';
+        // Only clear tokens on explicit auth rejection
+        if (res.status === 401 || res.status === 403) {
+          sessionStorage.removeItem('ra_token');
+          sessionStorage.removeItem('ra_room');
+          _token = ''; _roomId = '';
+        }
+        // On other errors (503, network, etc.) — leave tokens intact and
+        // show login form; user can retry without losing their session
+      } catch(e) {
+        // Network error — do NOT wipe tokens; show login form silently
+        console.warn('[RoomAdmin] Auto-login network error (tokens preserved):', e.message);
+      }
     }
   })();
 </script>

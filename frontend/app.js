@@ -216,8 +216,20 @@ function toggleLobbyPanel() {
  * Called when a user joins — server sends the last N messages from MySQL.
  * We render them with a "history" style before the live messages.
  */
+// FIX: Track whether chat history has been loaded to prevent duplicates
+// on Socket.IO reconnect (reconnectionAttempts:5 re-triggers chat_history)
+let _chatHistoryLoaded = false;
+
 socket.on('chat_history', ({ messages }) => {
   if (!messages || !messages.length) return;
+
+  // FIX: On reconnect the server re-sends chat_history. Clear existing messages
+  // first so we don't append duplicates. Only clear if history was already loaded.
+  const chatMessages = document.getElementById('chatMessages');
+  if (_chatHistoryLoaded && chatMessages) {
+    chatMessages.innerHTML = '';
+  }
+  _chatHistoryLoaded = true;
 
   const banner = document.getElementById('historyBanner');
   banner.classList.remove('hidden');
@@ -286,12 +298,20 @@ socket.on('participant_muted', ({ peerId, name, isMuted, by }) => {
  * Snapshot of who the host has muted — sent when joining a room mid-session.
  * Applies mute indicators to tiles for already-muted participants.
  */
+// FIX: Track currently-muted peers by peerId rather than display name.
+// mute_state_snapshot may arrive before peerTiles are created (race condition on join).
+// currentlyMutedPeers is checked in createTile() to apply mute indicator on creation.
+const currentlyMutedPeers = new Set();
+
 socket.on('mute_state_snapshot', ({ mutedNames }) => {
   mutedNames.forEach(name => {
-    // Find the peerId for this name and update their tile
+    // Apply to already-created tiles
     Object.entries(peerNames).forEach(([peerId, peerName]) => {
-      if (peerName === name && peerTiles[peerId]) {
-        peerTiles[peerId].muteIcon.classList.remove('hidden');
+      if (peerName === name) {
+        currentlyMutedPeers.add(peerId);
+        if (peerTiles[peerId]) {
+          peerTiles[peerId].muteIcon.classList.remove('hidden');
+        }
       }
     });
   });
@@ -400,6 +420,12 @@ function updateGridLayout() {
 }
 
 function removeTile(peerId) {
+  // FIX: Release srcObject reference before removing DOM node to prevent
+  // browser-level memory leak from retained MediaStream handles
+  if (peerTiles[peerId] && peerTiles[peerId].videoEl) {
+    peerTiles[peerId].videoEl.srcObject = null;
+    peerTiles[peerId].videoEl.load();
+  }
   const tile = document.getElementById('tile-' + peerId);
   if (tile) tile.remove();
   delete peerTiles[peerId]; delete peerNames[peerId];
@@ -493,10 +519,8 @@ socket.on('ice_candidate', async ({ candidate, sender }) => {
 socket.on('peer_left', ({ peerId }) => handlePeerDisconnect(peerId));
 
 socket.on('chat_message', ({ message, sender, senderId }) => {
-  // Server now broadcasts to ALL including sender.
-  // Skip self-echo here — sendChat() already added it locally.
-  if (senderId === socket.id) return;
-
+  // Server uses skip_sid so this event only arrives for OTHER users' messages.
+  // No self-echo guard needed — the sender never receives their own broadcast.
   appendChatMessage(sender, message, false);
   const panel = document.getElementById('chatPanel');
   if (panel.classList.contains('hidden')) {
@@ -562,6 +586,8 @@ async function toggleScreenShare() {
       document.getElementById('screenIcon').textContent = '⏹️';
       document.getElementById('screenBtn').classList.add('active');
       showToast('🖥️ Screen sharing started');
+      // FIX: onended fires when user stops via browser banner (not our button)
+      // We call stopScreenShare() which now also emits media_state to peers
       track.onended = stopScreenShare;
     } catch(e) {}
   } else { stopScreenShare(); }
@@ -570,6 +596,7 @@ async function toggleScreenShare() {
 function stopScreenShare() {
   if (!screenStream) return;
   screenStream.getTracks().forEach(t => t.stop());
+  screenStream = null;
   isScreenSharing = false;
   const camTrack = localStream && localStream.getVideoTracks()[0];
   if (camTrack) {
@@ -582,6 +609,8 @@ function stopScreenShare() {
   document.getElementById('screenIcon').textContent = '🖥️';
   document.getElementById('screenBtn').classList.remove('active');
   showToast('🖥️ Screen sharing stopped');
+  // FIX: Broadcast media_state so remote peers un-freeze their screen share view
+  socket.emit('media_state', { audioOn: isMicOn, videoOn: isCamOn });
 }
 
 function toggleHand() {

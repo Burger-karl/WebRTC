@@ -23,8 +23,7 @@
     <div class="room-form">
       <input type="text"     id="nameInput"     placeholder="Your name"                  maxlength="50"  autocomplete="name"  spellcheck="false"/>
       <input type="email"    id="emailInput"    placeholder="Your email (for billing)"   maxlength="120" autocomplete="email"/>
-      <input type="text"     id="roomInput"     placeholder="Room name (e.g. team-standup)" maxlength="80" autocomplete="off" spellcheck="false"
-             oninput="debounceRoomCheck()"/>
+      <input type="text" id="roomInput" oninput="this.value=this.value.toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9-]/g,''); debounceRoomCheck();" placeholder="Room name (e.g. team-standup)" maxlength="80" autocomplete="off" spellcheck="false"/>
 
       <!-- Password field — shown when joining a protected room OR when creating a new room -->
       <div id="passwordRow" class="password-row hidden">
@@ -75,9 +74,12 @@
     let _roomCheckTimer = null;
     let _roomNeedsPassword = false;
     let _roomExists = false;
+    // FIX: Track in-flight room check to prevent premature submission
+    let _roomCheckPending = false;
 
     function debounceRoomCheck() {
       clearTimeout(_roomCheckTimer);
+      _roomCheckPending = true;
       _roomCheckTimer = setTimeout(checkRoomStatus, 500);
     }
 
@@ -99,6 +101,7 @@
         const data = await res.json();
         _roomExists        = data.exists;
         _roomNeedsPassword = data.hasPassword;
+        _roomCheckPending  = false;
 
         if (_roomExists && _roomNeedsPassword) {
           // Joining a protected existing room — show enter-password field
@@ -115,12 +118,17 @@
         }
       } catch(e) {
         hidePasswordRows();
+        _roomCheckPending = false;
       }
     }
 
     function hidePasswordRows() {
       document.getElementById('passwordRow').classList.add('hidden');
       document.getElementById('setPasswordRow').classList.add('hidden');
+      // FIX: Clear password field values and reset flags to prevent stale state
+      // pollution when user deletes room name and types a new one
+      document.getElementById('passwordInput').value    = '';
+      document.getElementById('setPasswordInput').value = '';
       _roomNeedsPassword = false;
       _roomExists        = false;
     }
@@ -134,6 +142,12 @@
 
       if (!name)    { showError('Please enter your name.');   return; }
       if (!rawRoom) { showError('Please enter a room name.'); return; }
+      // FIX: Block join if room validation is still in-flight to prevent
+      // sending wrong password or stale _roomExists state
+      if (_roomCheckPending) {
+        showError('Checking room status… please wait a moment and try again.');
+        return;
+      }
 
       const room = rawRoom.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
       if (!room) { showError('Room name must contain letters or numbers.'); return; }
