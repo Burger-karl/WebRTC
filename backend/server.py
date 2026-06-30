@@ -33,6 +33,7 @@ from auth import (
     get_session,
     clear_session,
     require_auth,
+    init_session_store,
 )
 from payments import payments_bp, is_subscribed
 from bookings import bookings_bp
@@ -86,7 +87,11 @@ def _check_rate_limit(ip: str) -> bool:
     return True
 
 
-# ── Initialise MySQL and inject shared state ───────────────────────────────────
+# ── Initialise session store and MySQL ───────────────────────────────────────
+# FIX 1 [auth.py]: init_session_store() attaches the session dict to the Flask
+# app extensions — replacing the old bare module-level _socket_sessions global.
+init_session_store(app)
+
 with app.app_context():
     try:
         db.init_db(cfg)
